@@ -146,6 +146,16 @@ class APICaller:
         if endpoint.extra_headers:
             headers.update(endpoint.extra_headers)
 
+        # Shared subscription key from the endpoint's project (if any).
+        # Lets one key (e.g. PDDS-Subscription-Key) cover every endpoint in a
+        # project without entering it per-endpoint.
+        try:
+            project = endpoint.project
+        except Exception:
+            project = None
+        if project and project.sub_key_header and project.sub_key_value:
+            headers[project.sub_key_header] = project.sub_key_value
+
         # Auth
         if endpoint.auth_type in ("bearer", "oauth2"):
             old_token = endpoint.current_token
@@ -169,11 +179,21 @@ class APICaller:
         headers["__token_refreshed__"] = token_refreshed
         return headers
 
+    # Header names whose values must never be written to logs (lowercased).
+    _SENSITIVE_HEADERS = {
+        "authorization", "x-api-key", "ocp-apim-subscription-key",
+        "api-key", "apikey", "x-subscription-key", "subscription-key",
+        "__token_refreshed__",
+    }
+    # Substrings that mark a header as secret even if the exact name varies.
+    _SENSITIVE_HINTS = ("secret", "token", "subscription-key", "apikey", "api-key", "password")
+
     def _safe_headers(self, headers: dict) -> dict:
-        """Redact sensitive values before storing."""
+        """Redact sensitive values before storing in logs."""
         redacted = {}
         for k, v in headers.items():
-            if k.lower() in ("authorization", "x-api-key", "__token_refreshed__"):
+            kl = k.lower()
+            if kl in self._SENSITIVE_HEADERS or any(h in kl for h in self._SENSITIVE_HINTS):
                 redacted[k] = "***REDACTED***"
             else:
                 redacted[k] = v

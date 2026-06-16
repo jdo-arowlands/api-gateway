@@ -56,6 +56,9 @@ class Project(Base):
     name        = Column(String(100), unique=True, nullable=False)
     description = Column(Text)
     color       = Column(String(20), default="#2f81f7")   # accent for the UI badge
+    # Shared subscription key injected on every endpoint in this project.
+    sub_key_header = Column(String(100))   # e.g. 'PDDS-Subscription-Key'
+    sub_key_value  = Column(Text)          # the key itself (redacted in logs)
     created_at  = Column(DateTime, default=datetime.utcnow)
     updated_at  = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
@@ -185,22 +188,26 @@ Base.metadata.create_all(bind=engine)
 
 
 # ── Lightweight migration ─────────────────────────────────────────────────────
-# create_all() makes new tables but won't ALTER an existing api_endpoints table,
-# so add the project_id column if an older database is missing it.
-def _ensure_project_column():
+# create_all() makes new tables but won't ALTER existing ones, so add any
+# columns that were introduced after a table first shipped.
+def _ensure_column(table, column, ddl_type):
     from sqlalchemy import inspect, text
     insp = inspect(engine)
-    if "api_endpoints" not in insp.get_table_names():
+    if table not in insp.get_table_names():
         return
-    cols = {c["name"] for c in insp.get_columns("api_endpoints")}
-    if "project_id" not in cols:
+    cols = {c["name"] for c in insp.get_columns(table)}
+    if column not in cols:
         with engine.begin() as conn:
-            conn.execute(text(
-                "ALTER TABLE api_endpoints ADD COLUMN project_id INTEGER"
-            ))
+            conn.execute(text(f"ALTER TABLE {table} ADD COLUMN {column} {ddl_type}"))
+
+
+def _run_migrations():
+    _ensure_column("api_endpoints", "project_id", "INTEGER")
+    _ensure_column("projects", "sub_key_header", "VARCHAR(100)")
+    _ensure_column("projects", "sub_key_value", "TEXT")
 
 try:
-    _ensure_project_column()
+    _run_migrations()
 except Exception as _e:
     import logging
-    logging.getLogger("database").warning(f"project_id migration skipped: {_e}")
+    logging.getLogger("database").warning(f"migration skipped: {_e}")

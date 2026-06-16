@@ -132,6 +132,8 @@ class ProjectCreate(BaseModel):
     name: str
     description: Optional[str] = None
     color: Optional[str] = "#2f81f7"
+    sub_key_header: Optional[str] = None
+    sub_key_value: Optional[str] = None
 
 
 @app.get("/api/projects")
@@ -154,7 +156,12 @@ def update_project(pid: int, data: dict, db: Session = Depends(get_db)):
     p = db.query(Project).filter(Project.id == pid).first()
     if not p: raise HTTPException(404, "Not found")
     for k, v in data.items():
-        if hasattr(p, k) and k not in ("id", "created_at"):
+        if k in ("id", "created_at"):
+            continue
+        # Blank sub_key_value means "leave unchanged" so editing doesn't wipe it.
+        if k == "sub_key_value" and (v is None or v == ""):
+            continue
+        if hasattr(p, k):
             setattr(p, k, v)
     db.commit(); db.refresh(p)
     return _project_out(p, db)
@@ -175,6 +182,9 @@ def _project_out(p: Project, db: Session) -> dict:
     return {
         "id": p.id, "name": p.name, "description": p.description,
         "color": p.color, "endpoint_count": count,
+        "sub_key_header": p.sub_key_header,
+        # Never return the key value itself — just whether one is set.
+        "has_sub_key": bool(p.sub_key_value),
         "created_at": p.created_at,
     }
 

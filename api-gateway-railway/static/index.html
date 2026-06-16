@@ -1044,6 +1044,16 @@
           <label>Color</label>
           <input id="proj-color" type="color" value="#2f81f7" style="height:38px;padding:3px;cursor:pointer">
         </div>
+        <div class="form-group full" style="border-top:1px solid var(--border);padding-top:14px;margin-top:4px">
+          <label>Shared Subscription Key Header (optional)</label>
+          <input id="proj-subkey-header" placeholder="e.g. PDDS-Subscription-Key">
+          <span style="font-size:11px;color:var(--muted)">Sent on every endpoint in this project, alongside its own auth.</span>
+        </div>
+        <div class="form-group full">
+          <label>Subscription Key Value</label>
+          <input id="proj-subkey-value" type="password" placeholder="••••••••">
+          <span id="proj-subkey-hint" style="font-size:11px;color:var(--muted);display:none">A key is set. Leave blank to keep it; type to replace.</span>
+        </div>
       </div>
     </div>
     <div class="modal-footer">
@@ -1283,6 +1293,10 @@ function openProjectModal() {
   document.getElementById('proj-name').value = '';
   document.getElementById('proj-desc').value = '';
   document.getElementById('proj-color').value = '#2f81f7';
+  document.getElementById('proj-subkey-header').value = '';
+  document.getElementById('proj-subkey-value').value = '';
+  document.getElementById('proj-subkey-value').placeholder = '••••••••';
+  document.getElementById('proj-subkey-hint').style.display = 'none';
   document.getElementById('project-modal').classList.add('open');
 }
 
@@ -1292,21 +1306,31 @@ function editProject(p) {
   document.getElementById('proj-name').value = p.name;
   document.getElementById('proj-desc').value = p.description || '';
   document.getElementById('proj-color').value = p.color || '#2f81f7';
+  document.getElementById('proj-subkey-header').value = p.sub_key_header || '';
+  // Key value is never returned — show a hint if one is set.
+  document.getElementById('proj-subkey-value').value = '';
+  document.getElementById('proj-subkey-value').placeholder = p.has_sub_key ? '•••••• (unchanged)' : '••••••••';
+  document.getElementById('proj-subkey-hint').style.display = p.has_sub_key ? 'block' : 'none';
   document.getElementById('project-modal').classList.add('open');
 }
 
 async function saveProject() {
   try {
     const id = document.getElementById('proj-id').value;
+    const subVal = document.getElementById('proj-subkey-value').value;
     const payload = {
       name:        document.getElementById('proj-name').value,
       description: document.getElementById('proj-desc').value || null,
       color:       document.getElementById('proj-color').value,
+      sub_key_header: document.getElementById('proj-subkey-header').value || null,
     };
+    // Only send the key value if the user typed one (blank = keep existing on edit).
+    if (subVal) payload.sub_key_value = subVal;
     if (!payload.name) return toast('Project name required', 'error');
     if (id) {
       await api(`/api/projects/${id}`, 'PATCH', payload);
     } else {
+      if (subVal) payload.sub_key_value = subVal;
       await api('/api/projects', 'POST', payload);
     }
     closeModal('project-modal'); toast('Project saved'); loadProjects();
