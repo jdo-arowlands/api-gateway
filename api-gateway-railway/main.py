@@ -287,6 +287,29 @@ async def refresh_reference(office_id: Optional[str] = None):
         db.close()
 
 
+# ── Admin Tools ───────────────────────────────────────────────────────────────
+
+@app.get("/api/tools")
+def get_tools():
+    from admin_tools import list_tools
+    return {"tools": list_tools()}
+
+
+class ToolRun(BaseModel):
+    params: Optional[dict] = {}
+
+
+@app.post("/api/tools/{key}/run")
+async def run_admin_tool(key: str, body: ToolRun = ToolRun()):
+    from admin_tools import run_tool
+    from database import SessionLocal
+    db = SessionLocal()
+    try:
+        return await run_tool(key, body.params or {}, db)
+    finally:
+        db.close()
+
+
 # ── Endpoints (API connections) ───────────────────────────────────────────────
 
 class EndpointCreate(BaseModel):

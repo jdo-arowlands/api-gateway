@@ -602,6 +602,9 @@
     </div>
     <div class="nav-section">
       <div class="nav-label">Config</div>
+      <button class="nav-item" onclick="showPage('tools')">
+        🛠 Admin Tools
+      </button>
       <button class="nav-item" onclick="showPage('settings')">
         ⚙️ Settings
       </button>
@@ -878,6 +881,21 @@
           <tr><td colspan="6" class="muted" style="text-align:center;padding:40px">Loading...</td></tr>
         </tbody>
       </table>
+    </div>
+  </div>
+</div>
+
+<!-- ADMIN TOOLS -->
+<div id="page-tools" class="page" style="display:none">
+  <div class="topbar">
+    <h2>Admin Tools</h2>
+    <div class="topbar-actions">
+      <button class="btn btn-ghost btn-sm" onclick="loadTools()">↺ Refresh</button>
+    </div>
+  </div>
+  <div class="content">
+    <div id="tools-container">
+      <div class="muted" style="text-align:center;padding:40px">Loading tools...</div>
     </div>
   </div>
 </div>
@@ -1163,6 +1181,7 @@ function showPage(id) {
   if (id === 'webhooks-page')   { loadWebhookEvents(''); setWebhookUrls(); }
   if (id === 'call-logs')       loadLogs(0);
   if (id === 'job-runs')        loadJobRuns();
+  if (id === 'tools')           loadTools();
   if (id === 'settings')        loadSettings();
 }
 
@@ -1853,6 +1872,86 @@ async function showRunDetail(id) {
   `;
   document.getElementById('drawer-overlay').classList.add('open');
   document.getElementById('detail-drawer').classList.add('open');
+}
+
+// ── Admin Tools ───────────────────────────────────────────────────────────────
+async function loadTools() {
+  try {
+    const r = await api('/api/tools');
+    const tools = r.tools || [];
+    const container = document.getElementById('tools-container');
+    if (!tools.length) {
+      container.innerHTML = '<div class="empty"><div class="icon">🛠</div><p>No tools registered.</p></div>';
+      return;
+    }
+    // Group by category
+    const groups = {};
+    tools.forEach(t => { (groups[t.category] = groups[t.category] || []).push(t); });
+
+    let html = '';
+    Object.keys(groups).sort().forEach(cat => {
+      html += `<div style="margin-bottom:24px">
+        <div style="font-size:11px;font-weight:600;letter-spacing:0.5px;text-transform:uppercase;color:var(--muted);margin-bottom:12px">${cat}</div>
+        <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(320px,1fr));gap:16px">`;
+      groups[cat].forEach(t => {
+        const fields = (t.params || []).map(p => `
+          <div class="form-group" style="margin-top:8px">
+            <label>${p.label}${p.required ? ' *' : ''}</label>
+            <input id="tool-${t.key}-${p.name}" placeholder="${p.placeholder||''}">
+          </div>`).join('');
+        html += `
+          <div class="stat-card" style="display:flex;flex-direction:column;gap:8px">
+            <div style="font-size:14px;font-weight:600">${t.label}</div>
+            <div style="font-size:12px;color:var(--muted);line-height:1.5">${t.description}</div>
+            ${fields}
+            <div style="margin-top:10px;display:flex;align-items:center;gap:8px">
+              <button class="btn btn-primary btn-sm" id="tool-btn-${t.key}" onclick='runTool(${JSON.stringify(t)})'>Run</button>
+              <span id="tool-status-${t.key}" style="font-size:12px;color:var(--muted)"></span>
+            </div>
+            <div id="tool-result-${t.key}" style="display:none;margin-top:4px"></div>
+          </div>`;
+      });
+      html += `</div></div>`;
+    });
+    container.innerHTML = html;
+  } catch(e) { toast(e.message, 'error'); }
+}
+
+async function runTool(t) {
+  // Collect params
+  const params = {};
+  let missing = false;
+  (t.params || []).forEach(p => {
+    const v = document.getElementById(`tool-${t.key}-${p.name}`)?.value?.trim() || '';
+    if (p.required && !v) missing = true;
+    if (v) params[p.name] = v;
+  });
+  if (missing) return toast('Please fill in the required fields', 'error');
+  if (t.confirm && !confirm(`Run "${t.label}"?`)) return;
+
+  const btn = document.getElementById(`tool-btn-${t.key}`);
+  const status = document.getElementById(`tool-status-${t.key}`);
+  const resultEl = document.getElementById(`tool-result-${t.key}`);
+  btn.disabled = true; status.textContent = 'Running...';
+  resultEl.style.display = 'none';
+
+  try {
+    const r = await api(`/api/tools/${t.key}/run`, 'POST', { params });
+    status.textContent = '';
+    const ok = r.ok !== false;
+    let html = `<div class="pill ${ok ? 'success' : 'fail'}" style="margin-bottom:6px">${ok ? '✓' : '✗'} ${r.summary || (ok ? 'Done' : 'Failed')}</div>`;
+    if (Array.isArray(r.detail) && r.detail.length) {
+      html += `<pre style="margin-top:4px">${r.detail.join('\n')}</pre>`;
+    }
+    resultEl.innerHTML = html;
+    resultEl.style.display = 'block';
+  } catch(e) {
+    status.textContent = '';
+    resultEl.innerHTML = `<div class="pill fail">✗ ${e.message}</div>`;
+    resultEl.style.display = 'block';
+  } finally {
+    btn.disabled = false;
+  }
 }
 
 // ── Settings ──────────────────────────────────────────────────────────────────
