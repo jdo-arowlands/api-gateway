@@ -37,24 +37,30 @@ def _resolve_office(ctx: dict, db):
 # ── Practice reference refresh (cache production types/providers/operatories) ─
 
 async def _fetch_paginated(caller, path, params=None):
-    """Fetch all pages of a Denticon paginated Practices endpoint."""
+    """
+    Fetch all pages of a Denticon paginated Practices endpoint.
+    Returns (items, error, status_code) so callers can distinguish a genuine
+    empty result (error=None) from a failed call (error set, status_code set).
+    """
     params = dict(params or {})
     params.setdefault("PageSize", 1000)
     page = 1
     items = []
+    last_status = None
     while True:
         params["PageNumber"] = page
         r = await caller.call("denticon", "GET", path, params=params,
                               triggered_by="practice_reference_refresh")
+        last_status = r.get("status_code")
         if not r.get("success"):
-            return items, r.get("error")
+            return items, (r.get("error") or f"HTTP {last_status}"), last_status
         body = r.get("data") or {}
         items.extend(body.get("data") or [])
         total_pages = body.get("totalPages") or 1
         if page >= total_pages:
             break
         page += 1
-    return items, None
+    return items, None, last_status
 
 
 @register_action("refresh_practice_reference")
@@ -64,12 +70,14 @@ async def refresh_practice_reference(office_id=None, __context__: dict = None, _
     Denticon Practices API and cache them in denticon_reference. Run on demand
     from the dashboard or on a schedule. If office_id is omitted, refreshes
     every office in the Office Map.
+
+    Returns per-office counts AND per-type errors so a failed call (e.g. 401,
+    wrong host) is reported distinctly from a genuinely empty office.
     """
     from database import SessionLocal, DenticonReference, OfficePhoneMap
     db = __db__ or SessionLocal()
     caller = APICaller(db)
 
-    # Which offices to refresh
     if office_id:
         office_ids = [str(office_id)]
     else:
@@ -78,15 +86,31 @@ async def refresh_practice_reference(office_id=None, __context__: dict = None, _
         office_ids = sorted(set(office_ids))
 
     summary = {}
+    any_error = False
     for oid in office_ids:
         counts = {"production_type": 0, "provider": 0, "operatory": 0}
+        errors = {}
 
-        # Clear existing rows for this office, then repopulate.
+        ptypes, e1, s1 = await _fetch_paginated(
+            caller, f"/denticon/practices/v0/offices/{oid}/scheduler-production-types")
+        provs,  e2, s2 = await _fetch_paginated(
+            caller, "/denticon/practices/v0/providers", params={"OfficeId": oid})
+        ops,    e3, s3 = await _fetch_paginated(
+            caller, f"/denticon/practices/v0/offices/{oid}/operatories")
+
+        # If any call errored, record it and DON'T wipe good cached data for this office.
+        if e1 or e2 or e3:
+            any_error = True
+            if e1: errors["production_type"] = f"{e1} (status {s1})"
+            if e2: errors["provider"] = f"{e2} (status {s2})"
+            if e3: errors["operatory"] = f"{e3} (status {s3})"
+            summary[str(oid)] = {"counts": counts, "errors": errors}
+            logger.warning(f"Reference refresh for office {oid} had errors: {errors}")
+            continue
+
+        # All three calls succeeded — safe to replace cached rows.
         db.query(DenticonReference).filter(DenticonReference.office_id == str(oid)).delete()
 
-        # Production types
-        ptypes, err = await _fetch_paginated(
-            caller, f"/denticon/practices/v0/offices/{oid}/scheduler-production-types")
         for p in ptypes:
             db.add(DenticonReference(
                 office_id=str(oid), ref_type="production_type",
@@ -96,10 +120,6 @@ async def refresh_practice_reference(office_id=None, __context__: dict = None, _
                 bookable=bool(p.get("isBookableOnline") and p.get("isActive")),
             ))
             counts["production_type"] += 1
-
-        # Providers (filtered to this office)
-        provs, _ = await _fetch_paginated(
-            caller, "/denticon/practices/v0/providers", params={"OfficeId": oid})
         for pr in provs:
             full = " ".join(x for x in [pr.get("firstName"), pr.get("lastName")] if x)
             db.add(DenticonReference(
@@ -110,10 +130,6 @@ async def refresh_practice_reference(office_id=None, __context__: dict = None, _
                 extra={"title": pr.get("title"), "type": pr.get("providerType")},
             ))
             counts["provider"] += 1
-
-        # Operatories
-        ops, _ = await _fetch_paginated(
-            caller, f"/denticon/practices/v0/offices/{oid}/operatories")
         for op in ops:
             db.add(DenticonReference(
                 office_id=str(oid), ref_type="operatory",
@@ -123,10 +139,10 @@ async def refresh_practice_reference(office_id=None, __context__: dict = None, _
             counts["operatory"] += 1
 
         db.commit()
-        summary[str(oid)] = counts
+        summary[str(oid)] = {"counts": counts, "errors": {}}
         logger.info(f"Refreshed reference for office {oid}: {counts}")
 
-    return {"success": True, "offices": summary}
+    return {"success": not any_error, "offices": summary}
 
 
 # ── Retell Custom Function: find an existing patient ──────────────────────────

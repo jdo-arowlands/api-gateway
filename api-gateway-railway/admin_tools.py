@@ -44,14 +44,24 @@ async def _refresh_reference(params: dict, db):
     from actions import refresh_practice_reference
     office_id = (params.get("office_id") or "").strip() or None
     result = await refresh_practice_reference(office_id=office_id, __db__=db)
-    # Build a human summary line for the UI.
     offices = result.get("offices", {})
     if not offices:
-        return {"ok": True, "summary": "No offices to refresh (add office mappings first)."}
-    lines = [f"Office {oid}: {c['production_type']} types, "
-             f"{c['provider']} providers, {c['operatory']} operatories"
-             for oid, c in offices.items()]
-    return {"ok": True, "summary": "Refreshed reference data.", "detail": lines}
+        return {"ok": True, "summary": "No offices to refresh — add an office mapping first."}
+
+    lines = []
+    for oid, info in offices.items():
+        counts = info.get("counts", {})
+        errors = info.get("errors", {})
+        if errors:
+            for kind, msg in errors.items():
+                lines.append(f"Office {oid} — {kind}: FAILED — {msg}")
+        else:
+            lines.append(f"Office {oid}: {counts.get('production_type',0)} types, "
+                         f"{counts.get('provider',0)} providers, "
+                         f"{counts.get('operatory',0)} operatories")
+    ok = result.get("success", True)
+    summary = "Reference data refreshed." if ok else "Refresh hit errors — see details."
+    return {"ok": ok, "summary": summary, "detail": lines}
 
 
 async def _refresh_tokens(params: dict, db):
@@ -96,6 +106,25 @@ async def _test_endpoint_token(params: dict, db):
             "summary": f"{name}: token {'OK' if tok else 'could not be obtained'}"}
 
 
+async def _list_offices(params: dict, db):
+    from api_caller import APICaller
+    caller = APICaller(db)
+    r = await caller.call("denticon", "GET",
+                          "/denticon/practices/v0/offices",
+                          params={"PageSize": 1000},
+                          triggered_by="admin:list_offices")
+    if not r.get("success"):
+        return {"ok": False,
+                "summary": f"Couldn't list offices (status {r.get('status_code')}): {r.get('error')}"}
+    offices = (r.get("data") or {}).get("data") or []
+    if not offices:
+        return {"ok": True, "summary": "Authenticated OK, but no offices returned."}
+    lines = [f"{o.get('officeId')}: {o.get('officeName')}"
+             + (f" — {o.get('city')}, {o.get('state')}" if o.get('city') else "")
+             for o in offices]
+    return {"ok": True, "summary": f"Found {len(offices)} office(s).", "detail": lines}
+
+
 # ── Registry ──────────────────────────────────────────────────────────────────
 
 TOOLS: list[Tool] = [
@@ -108,6 +137,14 @@ TOOLS: list[Tool] = [
         params=[{"name": "office_id", "label": "Office ID (blank = all mapped offices)",
                  "type": "text", "required": False, "placeholder": "e.g. 101"}],
         handler=_refresh_reference,
+    ),
+    Tool(
+        key="list_offices",
+        label="List Denticon Offices",
+        description="Fetch every office from Denticon with its real ID and name — "
+                    "use this to confirm the Office IDs to put in the Office Map.",
+        category="Denticon",
+        handler=_list_offices,
     ),
     Tool(
         key="refresh_tokens",
