@@ -220,8 +220,27 @@ def get_endpoint(eid: int, db: Session = Depends(get_db)):
 def update_endpoint(eid: int, data: dict, db: Session = Depends(get_db)):
     e = db.query(APIEndpoint).filter(APIEndpoint.id == eid).first()
     if not e: raise HTTPException(404, "Not found")
+
+    # Never let these be set directly from the client.
+    protected = {"id", "current_token", "token_expires_at", "created_at"}
+    # Changing any of these invalidates the cached token.
+    auth_fields = {"auth_type", "token_url", "client_id", "client_secret",
+                   "token_scope", "api_key", "api_key_header", "base_url"}
+    auth_changed = False
+
     for k, v in data.items():
-        if hasattr(e, k): setattr(e, k, v)
+        if k in protected:
+            continue
+        if hasattr(e, k):
+            if k in auth_fields and getattr(e, k) != v:
+                auth_changed = True
+            setattr(e, k, v)
+
+    # Force a fresh token on next call if credentials/auth changed.
+    if auth_changed:
+        e.current_token = None
+        e.token_expires_at = None
+
     db.commit(); db.refresh(e)
     return _endpoint_out(e)
 

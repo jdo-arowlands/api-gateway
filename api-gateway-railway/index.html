@@ -892,6 +892,7 @@
       <button class="modal-close" onclick="closeModal('endpoint-modal')">×</button>
     </div>
     <div class="modal-body">
+      <input type="hidden" id="ep-id">
       <div class="form-grid">
         <div class="form-group">
           <label>Name (unique identifier)</label>
@@ -932,6 +933,7 @@
           <div class="form-group">
             <label>Client Secret</label>
             <input id="ep-client-secret" type="password" placeholder="••••••••">
+            <span id="ep-secret-hint" style="font-size:11px;color:var(--muted);display:none">Leave blank to keep the existing secret.</span>
           </div>
         </div>
         <!-- API Key -->
@@ -939,6 +941,7 @@
           <div class="form-group">
             <label>API Key</label>
             <input id="ep-api-key" type="password">
+            <span id="ep-apikey-hint" style="font-size:11px;color:var(--muted);display:none">Leave blank to keep the existing key.</span>
           </div>
           <div class="form-group">
             <label>Header Name</label>
@@ -1295,6 +1298,7 @@ function renderEndpoints() {
         <td><div class="status-dot ${e.is_active ? 'online' : 'offline'}"></div></td>
         <td>
           <div style="display:flex;gap:4px">
+            <button class="btn btn-ghost btn-sm" onclick="editEndpoint(${e.id})">Edit</button>
             <button class="btn btn-ghost btn-sm" onclick="testEndpoint(${e.id}, '${e.name}')">Test</button>
             <button class="btn btn-ghost btn-sm" onclick="reassignEndpoint(${e.id})">Move</button>
             <button class="btn btn-ghost btn-sm" onclick="deleteEndpoint(${e.id})">✕</button>
@@ -1332,37 +1336,122 @@ async function deleteEndpoint(id) {
   toast('Endpoint deleted'); loadEndpoints();
 }
 
+function _fillProjectDropdown() {
+  const sel = document.getElementById('ep-project');
+  const current = sel.value;
+  sel.innerHTML = '<option value="">— No project —</option>'
+    + _projectsCache.map(p => `<option value="${p.id}">${p.name}</option>`).join('');
+  sel.value = current;
+}
+
+function _resetEndpointForm() {
+  document.getElementById('ep-id').value = '';
+  document.getElementById('ep-name').value = '';
+  document.getElementById('ep-url').value = '';
+  document.getElementById('ep-auth').value = 'bearer';
+  document.getElementById('ep-token-url').value = '';
+  document.getElementById('ep-scope').value = '';
+  document.getElementById('ep-client-id').value = '';
+  document.getElementById('ep-client-secret').value = '';
+  document.getElementById('ep-api-key').value = '';
+  document.getElementById('ep-api-key-header').value = 'X-API-Key';
+  document.getElementById('ep-timeout').value = '30';
+  document.getElementById('ep-headers').value = '{}';
+}
+
 async function openEndpointModal() {
-  // Populate project dropdown fresh each open
   try {
     if (!_projectsCache.length) _projectsCache = await api('/api/projects');
   } catch(e) {}
-  const sel = document.getElementById('ep-project');
-  sel.innerHTML = '<option value="">— No project —</option>'
-    + _projectsCache.map(p => `<option value="${p.id}">${p.name}</option>`).join('');
+  _resetEndpointForm();
+  _fillProjectDropdown();
+  // Create mode UI
+  document.getElementById('endpoint-modal-title').textContent = 'New Endpoint';
+  document.getElementById('ep-name').disabled = false;
+  document.getElementById('ep-secret-hint').style.display = 'none';
+  document.getElementById('ep-apikey-hint').style.display = 'none';
+  document.getElementById('ep-client-secret').placeholder = '••••••••';
+  document.getElementById('ep-api-key').placeholder = '';
+  toggleAuthFields();
+  document.getElementById('endpoint-modal').classList.add('open');
+}
+
+async function editEndpoint(id) {
+  try {
+    if (!_projectsCache.length) _projectsCache = await api('/api/projects');
+  } catch(e) {}
+  // We have the endpoint in cache (minus the secret, which the API never returns)
+  const e = _endpointsCache.find(x => x.id === id);
+  if (!e) return toast('Endpoint not found', 'error');
+
+  _resetEndpointForm();
+  _fillProjectDropdown();
+
+  document.getElementById('endpoint-modal-title').textContent = 'Edit Endpoint';
+  document.getElementById('ep-id').value      = e.id;
+  document.getElementById('ep-name').value    = e.name;
+  document.getElementById('ep-name').disabled = false;          // name is editable
+  document.getElementById('ep-url').value     = e.base_url || '';
+  document.getElementById('ep-auth').value    = e.auth_type || 'bearer';
+  document.getElementById('ep-project').value = e.project_id || '';
+  document.getElementById('ep-token-url').value = e.token_url || '';
+  document.getElementById('ep-client-id').value = e.client_id || '';
+  document.getElementById('ep-api-key-header').value = e.api_key_header || 'X-API-Key';
+  document.getElementById('ep-timeout').value = e.default_timeout || 30;
+  document.getElementById('ep-headers').value = JSON.stringify(e.extra_headers || {}, null, 0);
+
+  // Secrets are never returned by the API. Show a hint that blank = keep existing.
+  document.getElementById('ep-client-secret').value = '';
+  document.getElementById('ep-client-secret').placeholder = '•••••• (unchanged)';
+  document.getElementById('ep-secret-hint').style.display = 'block';
+  document.getElementById('ep-api-key').value = '';
+  document.getElementById('ep-api-key').placeholder = '•••••• (unchanged)';
+  document.getElementById('ep-apikey-hint').style.display = 'block';
+
+  toggleAuthFields();
   document.getElementById('endpoint-modal').classList.add('open');
 }
 
 async function saveEndpoint() {
   try {
     let extra = {};
-    try { extra = JSON.parse(document.getElementById('ep-headers').value || '{}'); } catch(e) {}
+    try { extra = JSON.parse(document.getElementById('ep-headers').value || '{}'); }
+    catch(e) { return toast('Extra Headers must be valid JSON', 'error'); }
+
+    const id = document.getElementById('ep-id').value;
     const projVal = document.getElementById('ep-project').value;
-    await api('/api/endpoints', 'POST', {
+    const secret = document.getElementById('ep-client-secret').value;
+    const apikey = document.getElementById('ep-api-key').value;
+
+    const payload = {
       name:           document.getElementById('ep-name').value,
       base_url:       document.getElementById('ep-url').value,
       auth_type:      document.getElementById('ep-auth').value,
       project_id:     projVal ? +projVal : null,
       token_url:      document.getElementById('ep-token-url').value || null,
       client_id:      document.getElementById('ep-client-id').value || null,
-      client_secret:  document.getElementById('ep-client-secret').value || null,
       token_scope:    document.getElementById('ep-scope').value || null,
-      api_key:        document.getElementById('ep-api-key').value || null,
       api_key_header: document.getElementById('ep-api-key-header').value,
       default_timeout:+document.getElementById('ep-timeout').value,
       extra_headers:  extra,
-    });
-    closeModal('endpoint-modal'); toast('Endpoint saved'); loadEndpoints();
+    };
+
+    if (id) {
+      // EDIT: only send secret/api_key if the user typed a new one,
+      // so a blank field keeps the stored value instead of wiping it.
+      if (secret) payload.client_secret = secret;
+      if (apikey) payload.api_key = apikey;
+      await api(`/api/endpoints/${id}`, 'PATCH', payload);
+      toast('Endpoint updated');
+    } else {
+      // CREATE: send secrets as-is (null if blank)
+      payload.client_secret = secret || null;
+      payload.api_key = apikey || null;
+      await api('/api/endpoints', 'POST', payload);
+      toast('Endpoint created');
+    }
+    closeModal('endpoint-modal');
+    loadEndpoints();
   } catch(e) { toast(e.message, 'error'); }
 }
 
