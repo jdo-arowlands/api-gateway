@@ -161,6 +161,26 @@ class OfficePhoneMap(Base):
     updated_at  = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
 
+class DenticonReference(Base):
+    """
+    Cached Denticon practice reference data (production types, providers,
+    operatories) per office. Refreshed on demand or on a schedule via the
+    'refresh_practice_reference' action — avoids hitting the Practices API
+    mid-conversation. ref_type is 'production_type' | 'provider' | 'operatory'.
+    """
+    __tablename__ = "denticon_reference"
+
+    id          = Column(Integer, primary_key=True, index=True)
+    office_id   = Column(String(100), nullable=False, index=True)
+    ref_type    = Column(String(40), nullable=False, index=True)
+    ref_id      = Column(Integer, nullable=False)    # Denticon id (productionTypeId, etc.)
+    name        = Column(String(300))                # description / provider name / operatory name
+    duration    = Column(Integer)                    # for production types
+    bookable    = Column(Boolean, default=True)      # isBookableOnline (+ isActive)
+    extra       = Column(JSON, default=dict)
+    updated_at  = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
 Base.metadata.create_all(bind=engine)
 
 

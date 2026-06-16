@@ -34,6 +34,101 @@ def _resolve_office(ctx: dict, db):
     return office, None
 
 
+# ── Practice reference refresh (cache production types/providers/operatories) ─
+
+async def _fetch_paginated(caller, path, params=None):
+    """Fetch all pages of a Denticon paginated Practices endpoint."""
+    params = dict(params or {})
+    params.setdefault("PageSize", 1000)
+    page = 1
+    items = []
+    while True:
+        params["PageNumber"] = page
+        r = await caller.call("denticon", "GET", path, params=params,
+                              triggered_by="practice_reference_refresh")
+        if not r.get("success"):
+            return items, r.get("error")
+        body = r.get("data") or {}
+        items.extend(body.get("data") or [])
+        total_pages = body.get("totalPages") or 1
+        if page >= total_pages:
+            break
+        page += 1
+    return items, None
+
+
+@register_action("refresh_practice_reference")
+async def refresh_practice_reference(office_id=None, __context__: dict = None, __db__=None):
+    """
+    Pull production types, providers, and operatories for an office from the
+    Denticon Practices API and cache them in denticon_reference. Run on demand
+    from the dashboard or on a schedule. If office_id is omitted, refreshes
+    every office in the Office Map.
+    """
+    from database import SessionLocal, DenticonReference, OfficePhoneMap
+    db = __db__ or SessionLocal()
+    caller = APICaller(db)
+
+    # Which offices to refresh
+    if office_id:
+        office_ids = [str(office_id)]
+    else:
+        office_ids = [o.office_id for o in db.query(OfficePhoneMap)
+                      .filter(OfficePhoneMap.is_active == True).all()]
+        office_ids = sorted(set(office_ids))
+
+    summary = {}
+    for oid in office_ids:
+        counts = {"production_type": 0, "provider": 0, "operatory": 0}
+
+        # Clear existing rows for this office, then repopulate.
+        db.query(DenticonReference).filter(DenticonReference.office_id == str(oid)).delete()
+
+        # Production types
+        ptypes, err = await _fetch_paginated(
+            caller, f"/denticon/practices/v0/offices/{oid}/scheduler-production-types")
+        for p in ptypes:
+            db.add(DenticonReference(
+                office_id=str(oid), ref_type="production_type",
+                ref_id=p.get("productionTypeId"),
+                name=p.get("productionTypeDescription"),
+                duration=p.get("appointmentDuration"),
+                bookable=bool(p.get("isBookableOnline") and p.get("isActive")),
+            ))
+            counts["production_type"] += 1
+
+        # Providers (filtered to this office)
+        provs, _ = await _fetch_paginated(
+            caller, "/denticon/practices/v0/providers", params={"OfficeId": oid})
+        for pr in provs:
+            full = " ".join(x for x in [pr.get("firstName"), pr.get("lastName")] if x)
+            db.add(DenticonReference(
+                office_id=str(oid), ref_type="provider",
+                ref_id=pr.get("providerId"),
+                name=full or pr.get("providerShortId"),
+                bookable=bool(pr.get("isBookableOnline") and pr.get("active")),
+                extra={"title": pr.get("title"), "type": pr.get("providerType")},
+            ))
+            counts["provider"] += 1
+
+        # Operatories
+        ops, _ = await _fetch_paginated(
+            caller, f"/denticon/practices/v0/offices/{oid}/operatories")
+        for op in ops:
+            db.add(DenticonReference(
+                office_id=str(oid), ref_type="operatory",
+                ref_id=op.get("operatoryId"), name=op.get("operatoryName"),
+                bookable=True,
+            ))
+            counts["operatory"] += 1
+
+        db.commit()
+        summary[str(oid)] = counts
+        logger.info(f"Refreshed reference for office {oid}: {counts}")
+
+    return {"success": True, "offices": summary}
+
+
 # ── Retell Custom Function: find an existing patient ──────────────────────────
 
 @register_action("find_patient")
@@ -268,7 +363,24 @@ async def get_availability(__context__: dict = None, __db__=None):
     if err:
         return {"success": False, "message": err, "slots": []}
 
+    # Resolve appointment type: accept a numeric id, or a spoken name to match.
     production_type_id = args.get("production_type_id") or args.get("productionTypeId")
+    spoken_type = args.get("appointment_type") or args.get("appointmentType")
+
+    if not production_type_id and spoken_type:
+        from office_map import resolve_production_type
+        match = resolve_production_type(db, office["office_id"], spoken_type)
+        if match["matched"]:
+            production_type_id = match["production_type_id"]
+        elif match["ambiguous"]:
+            names = ", ".join(c["name"] for c in match["candidates"])
+            return {"success": True, "slots": [],
+                    "message": f"Did you mean one of these: {names}?"}
+        elif match["candidates"]:
+            names = ", ".join(c["name"] for c in match["candidates"])
+            return {"success": True, "slots": [],
+                    "message": f"We offer these appointment types: {names}. Which would you like?"}
+
     if not production_type_id:
         return {"success": False, "slots": [],
                 "message": "What kind of appointment is this for? I need that to check times."}

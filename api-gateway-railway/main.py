@@ -257,6 +257,36 @@ def _office_out(o: OfficePhoneMap) -> dict:
     }
 
 
+# ── Denticon practice reference (cached production types/providers/operatories) ─
+
+@app.get("/api/reference")
+def list_reference(office_id: Optional[str] = None, ref_type: Optional[str] = None,
+                   db: Session = Depends(get_db)):
+    from database import DenticonReference
+    q = db.query(DenticonReference)
+    if office_id: q = q.filter(DenticonReference.office_id == str(office_id))
+    if ref_type:  q = q.filter(DenticonReference.ref_type == ref_type)
+    rows = q.order_by(DenticonReference.office_id, DenticonReference.ref_type,
+                      DenticonReference.name).all()
+    return [{
+        "id": r.id, "office_id": r.office_id, "ref_type": r.ref_type,
+        "ref_id": r.ref_id, "name": r.name, "duration": r.duration,
+        "bookable": r.bookable, "updated_at": r.updated_at,
+    } for r in rows]
+
+
+@app.post("/api/reference/refresh")
+async def refresh_reference(office_id: Optional[str] = None):
+    """Pull fresh production types / providers / operatories from Denticon."""
+    from actions import refresh_practice_reference
+    from database import SessionLocal
+    db = SessionLocal()
+    try:
+        return await refresh_practice_reference(office_id=office_id, __db__=db)
+    finally:
+        db.close()
+
+
 # ── Endpoints (API connections) ───────────────────────────────────────────────
 
 class EndpointCreate(BaseModel):
