@@ -10,7 +10,89 @@ import logging
 logger = logging.getLogger("actions")
 
 
-# ── Retell AI handlers ────────────────────────────────────────────────────────
+# ── Retell Custom Function: add a patient ─────────────────────────────────────
+
+@register_action("add_patient")
+async def add_patient(__context__: dict = None, __db__=None):
+    """
+    Called by a Retell Custom Function mid-conversation to create a patient
+    in Denticon (or whichever endpoint you name below), then returns a short
+    message the agent can read back to the caller.
+
+    Expected context["args"] (collected by the Retell agent):
+        first_name, last_name, date_of_birth, phone, email  (adjust to your needs)
+
+    Returns:
+        {"success": bool, "message": str, "patient_id": str | None}
+        — 'message' is what the agent says back to the patient.
+    """
+    ctx  = __context__ or {}
+    args = ctx.get("args", {}) or {}
+
+    first = args.get("first_name") or args.get("firstName")
+    last  = args.get("last_name")  or args.get("lastName")
+    dob   = args.get("date_of_birth") or args.get("dob")
+    phone = args.get("phone")
+    email = args.get("email")
+
+    # Minimal validation so we don't push junk into the PMS.
+    missing = [f for f, v in {"first_name": first, "last_name": last, "phone": phone}.items() if not v]
+    if missing:
+        return {
+            "success": False,
+            "message": f"I still need the patient's {', '.join(missing)} before I can create the record.",
+            "patient_id": None,
+        }
+
+    db = __db__ or SessionLocal()
+    caller = APICaller(db)
+
+    # ─────────────────────────────────────────────────────────────────────────
+    # TODO: Replace the endpoint name, path, and body with your real Denticon
+    # (Planet DDS) create-patient contract. The endpoint "denticon" must already
+    # exist on the Endpoints page with its bearer credentials configured.
+    #
+    # Check the Denticon API docs for the exact path and required fields
+    # (officeId, etc.). The structure below is a placeholder.
+    # ─────────────────────────────────────────────────────────────────────────
+    result = await caller.call(
+        "denticon",                      # ← endpoint name as configured in the dashboard
+        "POST",
+        "/patients",                     # ← real Denticon create-patient path
+        body={
+            "firstName": first,
+            "lastName":  last,
+            "dateOfBirth": dob,
+            "phone": phone,
+            "email": email,
+            # "officeId": "...",        # ← Denticon often requires this; pull from settings
+        },
+        triggered_by="retell:add_patient",
+    )
+
+    if result.get("success"):
+        # Try to surface the new patient ID if the API returns one.
+        data = result.get("data") or {}
+        patient_id = (data.get("patientId") or data.get("id")
+                      if isinstance(data, dict) else None)
+        logger.info(f"Patient created via Retell: {first} {last} (id={patient_id})")
+        return {
+            "success": True,
+            "message": f"Great news — I've created a record for {first} {last}. You're all set.",
+            "patient_id": patient_id,
+        }
+
+    # Failed — keep the spoken message friendly, log the real error.
+    logger.error(f"add_patient failed: {result.get('error')}")
+    return {
+        "success": False,
+        "message": "I'm sorry, I wasn't able to create the record just now. "
+                   "Our team has been notified and will follow up.",
+        "patient_id": None,
+    }
+
+
+# ── Retell AI post-call handlers ──────────────────────────────────────────────
 
 @register_action("retell_call_ended")
 async def retell_call_ended(__context__: dict = None, __db__=None):

@@ -140,6 +140,92 @@ async def retell_webhook(
         db.close()
 
 
+# ── Retell AI Custom Function (synchronous, mid-conversation) ──────────────────
+# Point your Retell Custom Function's URL here. The agent calls this during the
+# chat, we run the matching action, and return a message the agent reads back.
+#
+# Map each Retell function name to a registered action in actions.py:
+RETELL_FUNCTIONS_TO_ACTIONS: dict[str, str] = {
+    "add_patient": "add_patient",
+    # "book_appointment": "book_appointment",
+    # "check_availability": "check_availability",
+}
+
+
+@router.post("/retell/function")
+async def retell_function(
+    request: Request,
+    x_retell_signature: str | None = Header(None),
+):
+    """
+    Receives a Retell Custom Function call mid-conversation.
+
+    Retell posts a JSON body that includes the function name and the arguments
+    the agent collected. We run the mapped action and return:
+        {"response": "<message for the agent to say>"}
+    within Retell's ~seconds-long timeout.
+    """
+    body = await request.body()
+    db = SessionLocal()
+    try:
+        try:
+            payload = json.loads(body)
+        except Exception:
+            raise HTTPException(400, "Invalid JSON")
+
+        # Retell sends the invoked function name and its arguments. Field names
+        # have varied across Retell versions, so check the common spots.
+        fn_name = (payload.get("name")
+                   or payload.get("function_name")
+                   or (payload.get("function") or {}).get("name"))
+        args = (payload.get("args")
+                or payload.get("arguments")
+                or payload.get("parameters")
+                or {})
+        call = payload.get("call", {}) or {}
+        call_id = call.get("call_id") or payload.get("call_id")
+
+        action_name = RETELL_FUNCTIONS_TO_ACTIONS.get(fn_name or "")
+        if not action_name:
+            logger.warning(f"Retell function '{fn_name}' not mapped")
+            _log_event(db, "retell_function", fn_name or "unknown", body.decode(),
+                       {"args": args}, "", False, "unmapped function",
+                       request.client.host if request.client else "")
+            # Still 200 so the agent gets a graceful message, not a silent failure.
+            return {"response": "That action isn't available right now."}
+
+        # Run the action directly (synchronous request/response).
+        from scheduler import JOB_REGISTRY
+        import asyncio
+        fn = JOB_REGISTRY.get(action_name)
+        context = {"source": "retell_function", "function": fn_name,
+                   "call_id": call_id, "args": args, "raw": payload}
+
+        result = {}
+        success = False
+        error = None
+        try:
+            kwargs = {"__context__": context, "__db__": db}
+            usable = {k: v for k, v in kwargs.items() if k in fn.__code__.co_varnames}
+            result = await fn(**usable) if asyncio.iscoroutinefunction(fn) else fn(**usable)
+            success = bool(result.get("success")) if isinstance(result, dict) else True
+        except Exception as exc:
+            error = str(exc)
+            logger.exception(f"Retell function '{fn_name}' errored: {exc}")
+
+        _log_event(db, "retell_function", fn_name, body.decode(),
+                   {"args": args, "result": result}, action_name,
+                   success, error, request.client.host if request.client else "")
+
+        # The agent reads back result["message"]; fall back to a generic line.
+        message = (result.get("message") if isinstance(result, dict) else None) \
+                  or ("Done." if success else "Sorry, something went wrong.")
+        return {"response": message}
+
+    finally:
+        db.close()
+
+
 # ── Web form webhook ──────────────────────────────────────────────────────────
 
 @router.post("/form/{form_id}")
