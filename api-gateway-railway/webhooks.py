@@ -146,9 +146,10 @@ async def retell_webhook(
 #
 # Map each Retell function name to a registered action in actions.py:
 RETELL_FUNCTIONS_TO_ACTIONS: dict[str, str] = {
-    "add_patient": "add_patient",
-    # "book_appointment": "book_appointment",
-    # "check_availability": "check_availability",
+    "find_patient": "find_patient",
+    "create_patient": "create_patient",
+    "get_availability": "get_availability",
+    "book_appointment": "book_appointment",
 }
 
 
