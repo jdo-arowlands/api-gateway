@@ -15,7 +15,7 @@ from typing import Any, Optional
 from datetime import datetime
 from sqlalchemy.orm import Session
 
-from database import get_db, APIEndpoint, APICallLog, AppSetting, SessionLocal, Project
+from database import get_db, APIEndpoint, APICallLog, AppSetting, SessionLocal, Project, OfficePhoneMap
 import actions  # noqa — registers all @register_action decorators on startup
 from api_caller import APICaller
 from scheduler import scheduler_service, JobDefinition, JobRunLog, JOB_REGISTRY, register_action
@@ -176,6 +176,84 @@ def _project_out(p: Project, db: Session) -> dict:
         "id": p.id, "name": p.name, "description": p.description,
         "color": p.color, "endpoint_count": count,
         "created_at": p.created_at,
+    }
+
+
+# ── Office phone map ──────────────────────────────────────────────────────────
+
+class OfficeMapCreate(BaseModel):
+    phone_number: str
+    office_id: str
+    office_name: Optional[str] = None
+    project_id: Optional[int] = None
+    is_active: Optional[bool] = True
+
+
+@app.get("/api/office-map")
+def list_office_map(db: Session = Depends(get_db)):
+    rows = db.query(OfficePhoneMap).order_by(OfficePhoneMap.office_name).all()
+    return [_office_out(o) for o in rows]
+
+
+@app.post("/api/office-map", status_code=201)
+def create_office_map(data: OfficeMapCreate, db: Session = Depends(get_db)):
+    from office_map import normalize_phone
+    phone = normalize_phone(data.phone_number)
+    if not phone:
+        raise HTTPException(400, "Invalid phone number")
+    if db.query(OfficePhoneMap).filter(OfficePhoneMap.phone_number == phone).first():
+        raise HTTPException(400, f"{phone} is already mapped")
+    payload = data.model_dump()
+    payload["phone_number"] = phone
+    o = OfficePhoneMap(**payload)
+    db.add(o); db.commit(); db.refresh(o)
+    return _office_out(o)
+
+
+@app.patch("/api/office-map/{oid}")
+def update_office_map(oid: int, data: dict, db: Session = Depends(get_db)):
+    o = db.query(OfficePhoneMap).filter(OfficePhoneMap.id == oid).first()
+    if not o: raise HTTPException(404, "Not found")
+    from office_map import normalize_phone
+    for k, v in data.items():
+        if k in ("id", "created_at"):
+            continue
+        if k == "phone_number":
+            v = normalize_phone(v)
+            if not v:
+                raise HTTPException(400, "Invalid phone number")
+            # guard against collision with another row
+            clash = (db.query(OfficePhoneMap)
+                       .filter(OfficePhoneMap.phone_number == v,
+                               OfficePhoneMap.id != oid).first())
+            if clash:
+                raise HTTPException(400, f"{v} is already mapped")
+        if hasattr(o, k):
+            setattr(o, k, v)
+    db.commit(); db.refresh(o)
+    return _office_out(o)
+
+
+@app.delete("/api/office-map/{oid}", status_code=204)
+def delete_office_map(oid: int, db: Session = Depends(get_db)):
+    o = db.query(OfficePhoneMap).filter(OfficePhoneMap.id == oid).first()
+    if not o: raise HTTPException(404, "Not found")
+    db.delete(o); db.commit()
+
+
+@app.get("/api/office-map/resolve")
+def resolve_office(to_number: str, db: Session = Depends(get_db)):
+    """Test helper: see which office a dialed number maps to."""
+    from office_map import resolve_office_id
+    return resolve_office_id(db, to_number)
+
+
+def _office_out(o: OfficePhoneMap) -> dict:
+    return {
+        "id": o.id, "phone_number": o.phone_number,
+        "office_id": o.office_id, "office_name": o.office_name,
+        "project_id": o.project_id, "is_active": o.is_active,
+        "created_at": o.created_at,
     }
 
 

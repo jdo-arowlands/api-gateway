@@ -143,6 +143,24 @@ class AppSetting(Base):
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
 
+class OfficePhoneMap(Base):
+    """
+    Maps an inbound phone number (the number a patient dialed) to a Denticon
+    office/location ID. The Retell agent never asks which office — the called
+    number identifies it. Stored E.164, e.g. '+18135550100'.
+    """
+    __tablename__ = "office_phone_map"
+
+    id          = Column(Integer, primary_key=True, index=True)
+    phone_number= Column(String(30), unique=True, nullable=False, index=True)
+    office_id   = Column(String(100), nullable=False)   # Denticon officeId
+    office_name = Column(String(200))                   # human label for the UI
+    project_id  = Column(Integer, ForeignKey("projects.id"), nullable=True)
+    is_active   = Column(Boolean, default=True)
+    created_at  = Column(DateTime, default=datetime.utcnow)
+    updated_at  = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
 Base.metadata.create_all(bind=engine)
 
 

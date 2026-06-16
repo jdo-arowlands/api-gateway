@@ -35,6 +35,21 @@ async def add_patient(__context__: dict = None, __db__=None):
     phone = args.get("phone")
     email = args.get("email")
 
+    # Resolve which office this is for, from the number the patient dialed.
+    db = __db__ or SessionLocal()
+    from office_map import resolve_office_id
+    to_number = (ctx.get("raw", {}).get("call", {}) or {}).get("to_number") \
+                or ctx.get("to_number")
+    office = resolve_office_id(db, to_number)
+    if not office["found"]:
+        logger.warning(f"add_patient: office unresolved ({office['error']})")
+        return {
+            "success": False,
+            "message": "I'm having trouble identifying which office this is for. "
+                       "Let me connect you with our team.",
+            "patient_id": None,
+        }
+
     # Minimal validation so we don't push junk into the PMS.
     missing = [f for f, v in {"first_name": first, "last_name": last, "phone": phone}.items() if not v]
     if missing:
@@ -44,7 +59,6 @@ async def add_patient(__context__: dict = None, __db__=None):
             "patient_id": None,
         }
 
-    db = __db__ or SessionLocal()
     caller = APICaller(db)
 
     # ─────────────────────────────────────────────────────────────────────────
@@ -52,20 +66,19 @@ async def add_patient(__context__: dict = None, __db__=None):
     # (Planet DDS) create-patient contract. The endpoint "denticon" must already
     # exist on the Endpoints page with its bearer credentials configured.
     #
-    # Check the Denticon API docs for the exact path and required fields
-    # (officeId, etc.). The structure below is a placeholder.
+    # office["office_id"] is the resolved Denticon officeId for this call.
     # ─────────────────────────────────────────────────────────────────────────
     result = await caller.call(
         "denticon",                      # ← endpoint name as configured in the dashboard
         "POST",
         "/patients",                     # ← real Denticon create-patient path
         body={
+            "officeId":  office["office_id"],
             "firstName": first,
             "lastName":  last,
             "dateOfBirth": dob,
             "phone": phone,
             "email": email,
-            # "officeId": "...",        # ← Denticon often requires this; pull from settings
         },
         triggered_by="retell:add_patient",
     )

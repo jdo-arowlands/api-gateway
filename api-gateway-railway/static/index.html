@@ -578,6 +578,9 @@
       <button class="nav-item" onclick="showPage('endpoints')">
         🔌 Endpoints <span class="badge" id="badge-endpoints">—</span>
       </button>
+      <button class="nav-item" onclick="showPage('office-map')">
+        ☎️ Office Map <span class="badge" id="badge-officemap">—</span>
+      </button>
     </div>
     <div class="nav-section">
       <div class="nav-label">Automation</div>
@@ -700,6 +703,41 @@
         </tbody>
       </table>
     </div>
+  </div>
+</div>
+
+<!-- OFFICE MAP -->
+<div id="page-office-map" class="page" style="display:none">
+  <div class="topbar">
+    <h2>Office Phone Map</h2>
+    <div class="topbar-actions">
+      <button class="btn btn-primary" onclick="openOfficeModal()">+ Add Mapping</button>
+    </div>
+  </div>
+  <div class="content">
+    <div class="table-wrap">
+      <div class="table-header">
+        <h3>Dialed Number → Denticon Office</h3>
+        <div class="filter-bar">
+          <div class="search-wrap">
+            <span class="icon">🔍</span>
+            <input type="text" placeholder="Search..." oninput="filterTable('office-map-body', this.value, [0,1,2])">
+          </div>
+        </div>
+      </div>
+      <table>
+        <thead><tr>
+          <th>Phone Numbers</th><th>Office Name</th><th>Office ID</th><th>Project</th><th>Status</th><th></th>
+        </tr></thead>
+        <tbody id="office-map-body">
+          <tr><td colspan="6" class="muted" style="text-align:center;padding:40px">Loading...</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p style="font-size:12px;color:var(--muted);margin-top:12px">
+      When a patient dials one of these numbers, the Retell agent resolves the office automatically —
+      no need to ask which location. The number Retell reports as <code style="font-family:var(--mono);font-size:11px;background:var(--surface2);padding:1px 5px;border-radius:3px">to_number</code> is matched here.
+    </p>
   </div>
 </div>
 
@@ -997,6 +1035,43 @@
   </div>
 </div>
 
+<!-- ── Office Map Modal ── -->
+<div class="modal-overlay" id="office-modal">
+  <div class="modal" style="width:480px">
+    <div class="modal-head">
+      <h3 id="office-modal-title">Add Mapping</h3>
+      <button class="modal-close" onclick="closeModal('office-modal')">×</button>
+    </div>
+    <div class="modal-body">
+      <input type="hidden" id="office-id-field">
+      <div class="form-grid">
+        <div class="form-group full">
+          <label>Phone Number (the number patients dial)</label>
+          <input id="office-phone" placeholder="+18135550100">
+        </div>
+        <div class="form-group">
+          <label>Office Name</label>
+          <input id="office-name" placeholder="Jefferson 59">
+        </div>
+        <div class="form-group">
+          <label>Denticon Office ID</label>
+          <input id="office-denticon-id" placeholder="OFFICE_59">
+        </div>
+        <div class="form-group full">
+          <label>Project (optional)</label>
+          <select id="office-project">
+            <option value="">— No project —</option>
+          </select>
+        </div>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-ghost" onclick="closeModal('office-modal')">Cancel</button>
+      <button class="btn btn-primary" onclick="saveOffice()">Save Mapping</button>
+    </div>
+  </div>
+</div>
+
 <!-- ── Job Modal ── -->
 <div class="modal-overlay" id="job-modal">
   <div class="modal">
@@ -1083,6 +1158,7 @@ function showPage(id) {
   if (id === 'dashboard')       loadDashboard();
   if (id === 'projects')        loadProjects();
   if (id === 'endpoints')       loadEndpoints();
+  if (id === 'office-map')      loadOfficeMap();
   if (id === 'jobs')            loadJobs();
   if (id === 'webhooks-page')   { loadWebhookEvents(''); setWebhookUrls(); }
   if (id === 'call-logs')       loadLogs(0);
@@ -1222,6 +1298,100 @@ async function deleteProject(id, name) {
   if (!confirm(`Delete project "${name}"? Its endpoints will be kept but ungrouped.`)) return;
   await api(`/api/projects/${id}`, 'DELETE');
   toast('Project deleted'); loadProjects();
+}
+
+// ── Office Phone Map ──────────────────────────────────────────────────────────
+let _officeCache = [];
+
+async function loadOfficeMap() {
+  try {
+    [_officeCache, _projectsCache] = await Promise.all([
+      api('/api/office-map'),
+      api('/api/projects'),
+    ]);
+    document.getElementById('badge-officemap').textContent = _officeCache.length;
+    const tbody = document.getElementById('office-map-body');
+    if (!_officeCache.length) {
+      tbody.innerHTML = '<tr><td colspan="6"><div class="empty"><div class="icon">☎️</div><p>No office mappings yet. Add one so the agent can resolve the office from the dialed number.</p></div></td></tr>';
+      return;
+    }
+    tbody.innerHTML = _officeCache.map(o => `
+      <tr>
+        <td class="mono"><strong>${o.phone_number}</strong></td>
+        <td>${o.office_name || '—'}</td>
+        <td class="mono">${o.office_id}</td>
+        <td>${projName(o.project_id)}</td>
+        <td><div class="status-dot ${o.is_active ? 'online' : 'offline'}"></div></td>
+        <td>
+          <div style="display:flex;gap:4px">
+            <button class="btn btn-ghost btn-sm" onclick='editOffice(${JSON.stringify(o)})'>Edit</button>
+            <button class="btn btn-danger btn-sm" onclick="deleteOffice(${o.id})">✕</button>
+          </div>
+        </td>
+      </tr>`).join('');
+  } catch(e) { toast(e.message, 'error'); }
+}
+
+function projName(pid) {
+  if (!pid) return '<span class="muted">—</span>';
+  const p = _projectsCache.find(x => x.id === pid);
+  return p ? `<span class="pill" style="background:${p.color}22;color:${p.color}">${p.name}</span>` : '—';
+}
+
+function _fillOfficeProjectDropdown() {
+  const sel = document.getElementById('office-project');
+  const current = sel.value;
+  sel.innerHTML = '<option value="">— No project —</option>'
+    + _projectsCache.map(p => `<option value="${p.id}">${p.name}</option>`).join('');
+  sel.value = current;
+}
+
+async function openOfficeModal() {
+  try { if (!_projectsCache.length) _projectsCache = await api('/api/projects'); } catch(e) {}
+  document.getElementById('office-modal-title').textContent = 'Add Mapping';
+  document.getElementById('office-id-field').value = '';
+  document.getElementById('office-phone').value = '';
+  document.getElementById('office-name').value = '';
+  document.getElementById('office-denticon-id').value = '';
+  _fillOfficeProjectDropdown();
+  document.getElementById('office-project').value = '';
+  document.getElementById('office-modal').classList.add('open');
+}
+
+function editOffice(o) {
+  document.getElementById('office-modal-title').textContent = 'Edit Mapping';
+  document.getElementById('office-id-field').value = o.id;
+  document.getElementById('office-phone').value = o.phone_number;
+  document.getElementById('office-name').value = o.office_name || '';
+  document.getElementById('office-denticon-id').value = o.office_id;
+  _fillOfficeProjectDropdown();
+  document.getElementById('office-project').value = o.project_id || '';
+  document.getElementById('office-modal').classList.add('open');
+}
+
+async function saveOffice() {
+  try {
+    const id = document.getElementById('office-id-field').value;
+    const projVal = document.getElementById('office-project').value;
+    const payload = {
+      phone_number: document.getElementById('office-phone').value,
+      office_name:  document.getElementById('office-name').value || null,
+      office_id:    document.getElementById('office-denticon-id').value,
+      project_id:   projVal ? +projVal : null,
+    };
+    if (!payload.phone_number || !payload.office_id) {
+      return toast('Phone number and Denticon Office ID are required', 'error');
+    }
+    if (id) await api(`/api/office-map/${id}`, 'PATCH', payload);
+    else    await api('/api/office-map', 'POST', payload);
+    closeModal('office-modal'); toast('Mapping saved'); loadOfficeMap();
+  } catch(e) { toast(e.message, 'error'); }
+}
+
+async function deleteOffice(id) {
+  if (!confirm('Delete this office mapping?')) return;
+  await api(`/api/office-map/${id}`, 'DELETE');
+  toast('Mapping deleted'); loadOfficeMap();
 }
 
 // ── Endpoints ─────────────────────────────────────────────────────────────────
