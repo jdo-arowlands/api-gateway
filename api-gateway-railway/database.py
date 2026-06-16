@@ -48,6 +48,20 @@ def get_db():
 
 # ── Models ────────────────────────────────────────────────────────────────────
 
+class Project(Base):
+    """Logical grouping for API endpoints (e.g. 'Jefferson Dental', 'Arch Servicing')."""
+    __tablename__ = "projects"
+
+    id          = Column(Integer, primary_key=True, index=True)
+    name        = Column(String(100), unique=True, nullable=False)
+    description = Column(Text)
+    color       = Column(String(20), default="#2f81f7")   # accent for the UI badge
+    created_at  = Column(DateTime, default=datetime.utcnow)
+    updated_at  = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    endpoints = relationship("APIEndpoint", back_populates="project")
+
+
 class APIEndpoint(Base):
     """Configured third-party API connections."""
     __tablename__ = "api_endpoints"
@@ -56,6 +70,7 @@ class APIEndpoint(Base):
     name            = Column(String(100), unique=True, nullable=False)
     base_url        = Column(String(500), nullable=False)
     auth_type       = Column(String(50), default="bearer")   # bearer | basic | api_key | oauth2
+    project_id      = Column(Integer, ForeignKey("projects.id"), nullable=True)
     # OAuth2 / bearer token settings
     token_url       = Column(String(500))
     client_id       = Column(String(500))
@@ -73,7 +88,8 @@ class APIEndpoint(Base):
     extra_headers   = Column(JSON, default=dict)   # any static headers to inject
     default_timeout = Column(Integer, default=30)
 
-    calls = relationship("APICallLog", back_populates="endpoint")
+    calls   = relationship("APICallLog", back_populates="endpoint")
+    project = relationship("Project", back_populates="endpoints")
 
 
 class APICallLog(Base):
@@ -128,3 +144,25 @@ class AppSetting(Base):
 
 
 Base.metadata.create_all(bind=engine)
+
+
+# ── Lightweight migration ─────────────────────────────────────────────────────
+# create_all() makes new tables but won't ALTER an existing api_endpoints table,
+# so add the project_id column if an older database is missing it.
+def _ensure_project_column():
+    from sqlalchemy import inspect, text
+    insp = inspect(engine)
+    if "api_endpoints" not in insp.get_table_names():
+        return
+    cols = {c["name"] for c in insp.get_columns("api_endpoints")}
+    if "project_id" not in cols:
+        with engine.begin() as conn:
+            conn.execute(text(
+                "ALTER TABLE api_endpoints ADD COLUMN project_id INTEGER"
+            ))
+
+try:
+    _ensure_project_column()
+except Exception as _e:
+    import logging
+    logging.getLogger("database").warning(f"project_id migration skipped: {_e}")

@@ -15,7 +15,7 @@ from typing import Any, Optional
 from datetime import datetime
 from sqlalchemy.orm import Session
 
-from database import get_db, APIEndpoint, APICallLog, AppSetting, SessionLocal
+from database import get_db, APIEndpoint, APICallLog, AppSetting, SessionLocal, Project
 import actions  # noqa — registers all @register_action decorators on startup
 from api_caller import APICaller
 from scheduler import scheduler_service, JobDefinition, JobRunLog, JOB_REGISTRY, register_action
@@ -126,12 +126,66 @@ app.include_router(webhook_router)
 # ENDPOINTS — grouped by resource
 # ═══════════════════════════════════════════════════════════════════════════════
 
+# ── Projects ──────────────────────────────────────────────────────────────────
+
+class ProjectCreate(BaseModel):
+    name: str
+    description: Optional[str] = None
+    color: Optional[str] = "#2f81f7"
+
+
+@app.get("/api/projects")
+def list_projects(db: Session = Depends(get_db)):
+    rows = db.query(Project).order_by(Project.name).all()
+    return [_project_out(p, db) for p in rows]
+
+
+@app.post("/api/projects", status_code=201)
+def create_project(data: ProjectCreate, db: Session = Depends(get_db)):
+    if db.query(Project).filter(Project.name == data.name).first():
+        raise HTTPException(400, "A project with that name already exists")
+    p = Project(**data.model_dump())
+    db.add(p); db.commit(); db.refresh(p)
+    return _project_out(p, db)
+
+
+@app.patch("/api/projects/{pid}")
+def update_project(pid: int, data: dict, db: Session = Depends(get_db)):
+    p = db.query(Project).filter(Project.id == pid).first()
+    if not p: raise HTTPException(404, "Not found")
+    for k, v in data.items():
+        if hasattr(p, k) and k not in ("id", "created_at"):
+            setattr(p, k, v)
+    db.commit(); db.refresh(p)
+    return _project_out(p, db)
+
+
+@app.delete("/api/projects/{pid}", status_code=204)
+def delete_project(pid: int, db: Session = Depends(get_db)):
+    p = db.query(Project).filter(Project.id == pid).first()
+    if not p: raise HTTPException(404, "Not found")
+    # Unassign endpoints rather than deleting them
+    db.query(APIEndpoint).filter(APIEndpoint.project_id == pid).update(
+        {APIEndpoint.project_id: None})
+    db.delete(p); db.commit()
+
+
+def _project_out(p: Project, db: Session) -> dict:
+    count = db.query(APIEndpoint).filter(APIEndpoint.project_id == p.id).count()
+    return {
+        "id": p.id, "name": p.name, "description": p.description,
+        "color": p.color, "endpoint_count": count,
+        "created_at": p.created_at,
+    }
+
+
 # ── Endpoints (API connections) ───────────────────────────────────────────────
 
 class EndpointCreate(BaseModel):
     name: str
     base_url: str
     auth_type: str = "bearer"
+    project_id: Optional[int] = None
     token_url: Optional[str] = None
     client_id: Optional[str] = None
     client_secret: Optional[str] = None
@@ -200,6 +254,9 @@ def _endpoint_out(e: APIEndpoint) -> dict:
         "extra_headers": e.extra_headers,
         "default_timeout": e.default_timeout,
         "is_active": e.is_active,
+        "project_id": e.project_id,
+        "project_name": e.project.name if e.project else None,
+        "project_color": e.project.color if e.project else None,
         "token_expires_at": e.token_expires_at,
         "created_at": e.created_at,
         "updated_at": e.updated_at,
