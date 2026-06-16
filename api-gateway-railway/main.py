@@ -5,11 +5,11 @@ import os
 import secrets
 import logging
 from contextlib import asynccontextmanager
-from fastapi import FastAPI, Depends, HTTPException, Query, Request
+from fastapi import FastAPI, Depends, HTTPException, Query, Request, Form
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse, JSONResponse
-from fastapi.security import HTTPBasic, HTTPBasicCredentials
+from fastapi.responses import FileResponse, JSONResponse, HTMLResponse, RedirectResponse
+from starlette.middleware.sessions import SessionMiddleware
 from pydantic import BaseModel
 from typing import Any, Optional
 from datetime import datetime
@@ -21,26 +21,20 @@ from api_caller import APICaller
 from scheduler import scheduler_service, JobDefinition, JobRunLog, JOB_REGISTRY, register_action
 from webhooks import router as webhook_router, WebhookEvent
 
-# ── Optional dashboard basic-auth ─────────────────────────────────────────────
-_DASH_USER = os.getenv("DASHBOARD_USER", "")
-_DASH_PASS = os.getenv("DASHBOARD_PASSWORD", "")
-_AUTH_ENABLED = bool(_DASH_USER and _DASH_PASS)
-security = HTTPBasic(auto_error=False)
+# ── Dashboard login ───────────────────────────────────────────────────────────
+# Single shared admin login. Set these in Railway → Variables.
+_DASH_USER   = os.getenv("DASHBOARD_USER", "admin")
+_DASH_PASS   = os.getenv("DASHBOARD_PASSWORD", "")
+_SECRET_KEY  = os.getenv("SECRET_KEY", secrets.token_hex(32))
+# If no password is configured the dashboard is left open (local dev convenience).
+_AUTH_ENABLED = bool(_DASH_PASS)
 
-def require_auth(credentials: HTTPBasicCredentials = Depends(security)):
-    if not _AUTH_ENABLED:
-        return
-    ok = (
-        credentials is not None
-        and secrets.compare_digest(credentials.username.encode(), _DASH_USER.encode())
-        and secrets.compare_digest(credentials.password.encode(), _DASH_PASS.encode())
-    )
-    if not ok:
-        raise HTTPException(
-            status_code=401,
-            detail="Unauthorized",
-            headers={"WWW-Authenticate": "Basic realm='API Gateway'"},
-        )
+# Paths that never require a login: the login flow itself, health check,
+# and inbound webhooks (called by Retell / forms with their own secrets).
+_PUBLIC_PREFIXES = ("/login", "/logout", "/health", "/webhooks", "/static")
+
+def _is_public(path: str) -> bool:
+    return any(path == p or path.startswith(p + "/") for p in _PUBLIC_PREFIXES)
 
 logging.basicConfig(level=logging.INFO,
     format="%(asctime)s [%(name)s] %(levelname)s: %(message)s")
@@ -96,6 +90,34 @@ app = FastAPI(title="API Gateway", version="1.0.0", lifespan=lifespan)
 app.add_middleware(CORSMiddleware,
     allow_origins=["*"], allow_credentials=True,
     allow_methods=["*"], allow_headers=["*"])
+
+
+@app.middleware("http")
+async def auth_gate(request: Request, call_next):
+    """Block every non-public path unless the session is logged in."""
+    if not _AUTH_ENABLED or _is_public(request.url.path):
+        return await call_next(request)
+
+    if request.session.get("authed"):
+        return await call_next(request)
+
+    # Not logged in. API calls get a clean 401; browser navigations get redirected.
+    if request.url.path.startswith("/api"):
+        return JSONResponse({"detail": "Not authenticated"}, status_code=401)
+    return RedirectResponse(url="/login", status_code=302)
+
+
+# Added AFTER auth_gate so it becomes the OUTER middleware and runs first,
+# populating request.session before auth_gate reads it.
+app.add_middleware(
+    SessionMiddleware,
+    secret_key=_SECRET_KEY,
+    session_cookie="gw_session",
+    max_age=14 * 24 * 3600,
+    same_site="lax",
+    https_only=False,   # Railway terminates TLS at the edge; cookie still travels over HTTPS
+)
+
 
 app.include_router(webhook_router)
 
@@ -421,11 +443,91 @@ def health():
     return {"status": "ok"}
 
 
-# ── Serve dashboard (auth-protected) ─────────────────────────────────────────
+# ── Login / Logout ────────────────────────────────────────────────────────────
+
+_LOGIN_PAGE = """<!DOCTYPE html>
+<html lang="en"><head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Sign in · API Gateway</title>
+<style>
+  :root {{ --bg:#0d1117; --surface:#161b22; --border:#30363d; --text:#e6edf3;
+           --muted:#7d8590; --accent:#2f81f7; --red:#f85149; }}
+  * {{ box-sizing:border-box; margin:0; padding:0; }}
+  body {{ background:var(--bg); color:var(--text); min-height:100vh;
+          display:flex; align-items:center; justify-content:center;
+          font-family:'Inter',system-ui,sans-serif; }}
+  .card {{ background:var(--surface); border:1px solid var(--border);
+           border-radius:12px; padding:36px 32px; width:340px; }}
+  .logo {{ display:flex; align-items:center; gap:10px; margin-bottom:24px; }}
+  .logo .icon {{ width:36px; height:36px; background:var(--accent); border-radius:9px;
+                 display:flex; align-items:center; justify-content:center; font-size:18px; }}
+  .logo h1 {{ font-size:16px; font-weight:600; }}
+  .logo span {{ font-size:12px; color:var(--muted); display:block; }}
+  label {{ font-size:12px; color:var(--muted); display:block; margin-bottom:6px; }}
+  input {{ width:100%; background:#1c2128; border:1px solid var(--border); border-radius:7px;
+           color:var(--text); padding:10px 12px; font-size:14px; outline:none; margin-bottom:16px; }}
+  input:focus {{ border-color:var(--accent); }}
+  button {{ width:100%; background:var(--accent); color:#fff; border:none; border-radius:7px;
+            padding:11px; font-size:14px; font-weight:500; cursor:pointer; }}
+  button:hover {{ background:#1f6feb; }}
+  .err {{ background:rgba(248,81,73,0.1); border:1px solid rgba(248,81,73,0.3);
+          color:var(--red); font-size:13px; padding:9px 12px; border-radius:7px; margin-bottom:16px; }}
+</style></head><body>
+  <form class="card" method="post" action="/login">
+    <div class="logo">
+      <div class="icon">⚡</div>
+      <div><h1>API Gateway</h1><span>Sign in to continue</span></div>
+    </div>
+    {error}
+    <label>Username</label>
+    <input name="username" autocomplete="username" autofocus required>
+    <label>Password</label>
+    <input name="password" type="password" autocomplete="current-password" required>
+    <button type="submit">Sign in</button>
+  </form>
+</body></html>"""
+
+
+@app.get("/login", response_class=HTMLResponse)
+def login_page(request: Request):
+    if not _AUTH_ENABLED or request.session.get("authed"):
+        return RedirectResponse(url="/", status_code=302)
+    return HTMLResponse(_LOGIN_PAGE.format(error=""))
+
+
+@app.post("/login", response_class=HTMLResponse)
+def login_submit(request: Request,
+                 username: str = Form(...), password: str = Form(...)):
+    ok = (
+        secrets.compare_digest(username.encode(), _DASH_USER.encode())
+        and secrets.compare_digest(password.encode(), _DASH_PASS.encode())
+    )
+    if ok:
+        request.session["authed"] = True
+        request.session["user"] = username
+        return RedirectResponse(url="/", status_code=302)
+    err = '<div class="err">Incorrect username or password.</div>'
+    return HTMLResponse(_LOGIN_PAGE.format(error=err), status_code=401)
+
+
+@app.get("/logout")
+def logout(request: Request):
+    request.session.clear()
+    return RedirectResponse(url="/login", status_code=302)
+
+
+@app.get("/api/me")
+def whoami(request: Request):
+    return {"user": request.session.get("user", _DASH_USER),
+            "auth_enabled": _AUTH_ENABLED}
+
+
+# ── Serve dashboard ───────────────────────────────────────────────────────────
+# The auth_gate middleware already protects this route.
 
 _STATIC_DIR = os.path.join(os.path.dirname(__file__), "static")
 
-@app.get("/", dependencies=[Depends(require_auth)])
+@app.get("/")
 def serve_dashboard():
     index = os.path.join(_STATIC_DIR, "index.html")
     if os.path.exists(index):
