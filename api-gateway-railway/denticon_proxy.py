@@ -5,7 +5,10 @@ Proxy routes called by ins-verify-api instead of hitting Planet DDS directly.
 Uses the existing APICaller + TokenManager so credentials stay in the DB
 and all calls are logged in the gateway dashboard.
 
-Endpoint name in gateway DB: "Staging-Denticon"
+Endpoint name controlled by DENTICON_ENDPOINT env var.
+Set in Railway → gateway service → Variables:
+  DENTICON_ENDPOINT=denticon          (staging)
+  DENTICON_ENDPOINT=denticon-prod     (production, when ready)
 """
 
 from fastapi import APIRouter, Request, HTTPException, Query
@@ -17,7 +20,7 @@ import os
 router = APIRouter(prefix="/proxy/denticon", tags=["denticon-proxy"])
 
 GATEWAY_API_KEY = os.environ.get("GATEWAY_API_KEY", "")
-DENTICON_ENDPOINT = "Staging-Denticon"
+DENTICON_ENDPOINT = os.environ.get("DENTICON_ENDPOINT", "denticon")
 
 
 def _verify_internal(request: Request):
@@ -85,7 +88,7 @@ async def proxy_insurance(request: Request, patient_id: str):
     _verify_internal(request)
     result = await _call(
         "GET",
-        "/denticon/insurance/v0/patient/{patient_id}".replace("{patient_id}", patient_id),
+        f"/denticon/insurance/v0/patient/{patient_id}",
     )
     return JSONResponse(content=result)
 
