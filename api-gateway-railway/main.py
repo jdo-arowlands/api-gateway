@@ -33,7 +33,7 @@ _AUTH_ENABLED = bool(_DASH_PASS)
 
 # Paths that never require a login: the login flow itself, health check,
 # and inbound webhooks (called by Retell / forms with their own secrets).
-_PUBLIC_PREFIXES = ("/login", "/logout", "/health", "/webhooks", "/static")
+_PUBLIC_PREFIXES = ("/login", "/logout", "/health", "/webhooks", "/static", "/proxy")
 
 def _is_public(path: str) -> bool:
     return any(path == p or path.startswith(p + "/") for p in _PUBLIC_PREFIXES)
