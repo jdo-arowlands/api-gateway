@@ -1,381 +1,759 @@
-from fastapi import FastAPI, Depends, HTTPException, UploadFile, File, Form, status
+"""
+API Gateway – Main Application
+"""
+import os
+import secrets
+import logging
+from contextlib import asynccontextmanager
+from fastapi import FastAPI, Depends, HTTPException, Query, Request, Form
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
+from fastapi.responses import FileResponse, JSONResponse, HTMLResponse, RedirectResponse
+from starlette.middleware.sessions import SessionMiddleware
+from pydantic import BaseModel
+from typing import Any, Optional
+from datetime import datetime
 from sqlalchemy.orm import Session
-from typing import Optional, List
-import os, shutil, uuid, smtplib, json
-from email.mime.text import MIMEText
-from email.mime.multipart import MIMEMultipart
-from datetime import datetime, timedelta
-from jose import JWTError, jwt
-from passlib.context import CryptContext
-from dotenv import load_dotenv
-import cloudinary
-import cloudinary.uploader
+from database import get_db, APIEndpoint, APICallLog, AppSetting, SessionLocal, Project, OfficePhoneMap
+import actions  # noqa — registers all @register_action decorators on startup
+from api_caller import APICaller
+from scheduler import scheduler_service, JobDefinition, JobRunLog, JOB_REGISTRY, register_action
+from webhooks import router as webhook_router, WebhookEvent
+from denticon_proxy import router as denticon_proxy_router
 
-from database import SessionLocal, engine, Base
-import models, schemas
+# ── Dashboard login ───────────────────────────────────────────────────────────
+# Single shared admin login. Set these in Railway → Variables.
+_DASH_USER   = os.getenv("DASHBOARD_USER", "admin")
+_DASH_PASS   = os.getenv("DASHBOARD_PASSWORD", "")
+_SECRET_KEY  = os.getenv("SECRET_KEY", secrets.token_hex(32))
+# If no password is configured the dashboard is left open (local dev convenience).
+_AUTH_ENABLED = bool(_DASH_PASS)
 
-load_dotenv()
-Base.metadata.create_all(bind=engine)
+# Paths that never require a login: the login flow itself, health check,
+# and inbound webhooks (called by Retell / forms with their own secrets).
+_PUBLIC_PREFIXES = ("/login", "/logout", "/health", "/webhooks", "/static", "/proxy")
 
-cloudinary.config(
-    cloud_name=os.getenv("CLOUDINARY_CLOUD_NAME"),
-    api_key=os.getenv("CLOUDINARY_API_KEY"),
-    api_secret=os.getenv("CLOUDINARY_API_SECRET"),
-    secure=True,
-)
+def _is_public(path: str) -> bool:
+    return any(path == p or path.startswith(p + "/") for p in _PUBLIC_PREFIXES)
 
-def upload_image_to_cloudinary(file: UploadFile) -> str:
-    result = cloudinary.uploader.upload(
-        file.file,
-        folder="tubrent",
-        resource_type="image",
+logging.basicConfig(level=logging.INFO,
+    format="%(asctime)s [%(name)s] %(levelname)s: %(message)s")
+logger = logging.getLogger("main")
+
+
+# ── Register built-in job actions ─────────────────────────────────────────────
+
+@register_action("api_call")
+async def action_api_call(endpoint_name: str, method: str, path: str,
+                          body: dict = None, __context__: dict = None, __db__: Session = None):
+    """Generic action: make an authenticated API call."""
+    db = __db__ or SessionLocal()
+    caller = APICaller(db)
+    return await caller.call(
+        endpoint_name, method, path,
+        body=body,
+        triggered_by=(__context__ or {}).get("source", "scheduler"),
     )
-    return result["secure_url"]
 
-app = FastAPI(title="TubRent API")
 
+@register_action("http_get")
+async def action_http_get(endpoint_name: str, path: str,
+                          __context__: dict = None, __db__: Session = None):
+    db = __db__ or SessionLocal()
+    caller = APICaller(db)
+    return await caller.call(endpoint_name, "GET", path,
+                             triggered_by=(__context__ or {}).get("source", "scheduler"))
+
+
+@register_action("log_retell_call")
+async def action_log_retell_call(__context__: dict = None, __db__: Session = None):
+    """Log a Retell AI call event — extend with your CRM write logic."""
+    ctx = __context__ or {}
+    logger.info(f"Retell call logged: {ctx.get('call_id')} event={ctx.get('event_type')}")
+    # TODO: push to your CRM, update appointment status, etc.
+    return {"call_id": ctx.get("call_id"), "event": ctx.get("event_type")}
+
+
+# ── App lifespan ──────────────────────────────────────────────────────────────
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    scheduler_service.start()
+    logger.info("API Gateway started")
+    yield
+    scheduler_service.stop()
+    logger.info("API Gateway stopped")
+
+
+app = FastAPI(title="API Gateway", version="1.0.0", lifespan=lifespan)
+
+app.add_middleware(CORSMiddleware,
+    allow_origins=["*"], allow_credentials=True,
+    allow_methods=["*"], allow_headers=["*"])
+
+
+@app.middleware("http")
+async def auth_gate(request: Request, call_next):
+    """Block every non-public path unless the session is logged in."""
+    path = request.url.path
+    public = _is_public(path)
+    logger.info(f"AUTH_GATE path={repr(path)} public={public} auth_enabled={_AUTH_ENABLED}")
+    if not _AUTH_ENABLED or public:
+        return await call_next(request)
+
+    if request.session.get("authed"):
+        return await call_next(request)
+
+    # Not logged in. API calls get a clean 401; browser navigations get redirected.
+    if path.startswith("/api"):
+        return JSONResponse({"detail": "Not authenticated"}, status_code=401)
+    return RedirectResponse(url="/login", status_code=302)
+
+
+# Added AFTER auth_gate so it becomes the OUTER middleware and runs first,
+# populating request.session before auth_gate reads it.
 app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    SessionMiddleware,
+    secret_key=_SECRET_KEY,
+    session_cookie="gw_session",
+    max_age=14 * 24 * 3600,
+    same_site="lax",
+    https_only=False,   # Railway terminates TLS at the edge; cookie still travels over HTTPS
 )
 
-UPLOAD_DIR = "uploads"
-os.makedirs(UPLOAD_DIR, exist_ok=True)
 
-SECRET_KEY = os.getenv("SECRET_KEY", "tubrent-super-secret-key-change-in-prod")
-ALGORITHM = "HS256"
-ACCESS_TOKEN_EXPIRE_MINUTES = 60 * 24
+app.include_router(webhook_router)
+app.include_router(denticon_proxy_router)
 
-SMTP_HOST = os.getenv("SMTP_HOST", "smtp.gmail.com")
-SMTP_PORT = int(os.getenv("SMTP_PORT", "587"))
-SMTP_USER = os.getenv("SMTP_USER", "")
-SMTP_PASS = os.getenv("SMTP_PASS", "")
-FROM_EMAIL = os.getenv("FROM_EMAIL", SMTP_USER)
-ADMIN_EMAIL = os.getenv("ADMIN_EMAIL", SMTP_USER)
 
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
-oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/auth/login")
+# ═══════════════════════════════════════════════════════════════════════════════
+# ENDPOINTS — grouped by resource
+# ═══════════════════════════════════════════════════════════════════════════════
 
-def get_db():
+# ── Projects ──────────────────────────────────────────────────────────────────
+
+class ProjectCreate(BaseModel):
+    name: str
+    description: Optional[str] = None
+    color: Optional[str] = "#2f81f7"
+    sub_key_header: Optional[str] = None
+    sub_key_value: Optional[str] = None
+
+
+@app.get("/api/projects")
+def list_projects(db: Session = Depends(get_db)):
+    rows = db.query(Project).order_by(Project.name).all()
+    return [_project_out(p, db) for p in rows]
+
+
+@app.post("/api/projects", status_code=201)
+def create_project(data: ProjectCreate, db: Session = Depends(get_db)):
+    if db.query(Project).filter(Project.name == data.name).first():
+        raise HTTPException(400, "A project with that name already exists")
+    p = Project(**data.model_dump())
+    db.add(p); db.commit(); db.refresh(p)
+    return _project_out(p, db)
+
+
+@app.patch("/api/projects/{pid}")
+def update_project(pid: int, data: dict, db: Session = Depends(get_db)):
+    p = db.query(Project).filter(Project.id == pid).first()
+    if not p: raise HTTPException(404, "Not found")
+    for k, v in data.items():
+        if k in ("id", "created_at"):
+            continue
+        # Blank sub_key_value means "leave unchanged" so editing doesn't wipe it.
+        if k == "sub_key_value" and (v is None or v == ""):
+            continue
+        if hasattr(p, k):
+            setattr(p, k, v)
+    db.commit(); db.refresh(p)
+    return _project_out(p, db)
+
+
+@app.delete("/api/projects/{pid}", status_code=204)
+def delete_project(pid: int, db: Session = Depends(get_db)):
+    p = db.query(Project).filter(Project.id == pid).first()
+    if not p: raise HTTPException(404, "Not found")
+    # Unassign endpoints rather than deleting them
+    db.query(APIEndpoint).filter(APIEndpoint.project_id == pid).update(
+        {APIEndpoint.project_id: None})
+    db.delete(p); db.commit()
+
+
+def _project_out(p: Project, db: Session) -> dict:
+    count = db.query(APIEndpoint).filter(APIEndpoint.project_id == p.id).count()
+    return {
+        "id": p.id, "name": p.name, "description": p.description,
+        "color": p.color, "endpoint_count": count,
+        "sub_key_header": p.sub_key_header,
+        # Never return the key value itself — just whether one is set.
+        "has_sub_key": bool(p.sub_key_value),
+        "created_at": p.created_at,
+    }
+
+
+# ── Office phone map ──────────────────────────────────────────────────────────
+
+class OfficeMapCreate(BaseModel):
+    phone_number: str
+    office_id: str
+    office_name: Optional[str] = None
+    project_id: Optional[int] = None
+    is_active: Optional[bool] = True
+
+
+@app.get("/api/office-map")
+def list_office_map(db: Session = Depends(get_db)):
+    rows = db.query(OfficePhoneMap).order_by(OfficePhoneMap.office_name).all()
+    return [_office_out(o) for o in rows]
+
+
+@app.post("/api/office-map", status_code=201)
+def create_office_map(data: OfficeMapCreate, db: Session = Depends(get_db)):
+    from office_map import normalize_phone
+    phone = normalize_phone(data.phone_number)
+    if not phone:
+        raise HTTPException(400, "Invalid phone number")
+    if db.query(OfficePhoneMap).filter(OfficePhoneMap.phone_number == phone).first():
+        raise HTTPException(400, f"{phone} is already mapped")
+    payload = data.model_dump()
+    payload["phone_number"] = phone
+    o = OfficePhoneMap(**payload)
+    db.add(o); db.commit(); db.refresh(o)
+    return _office_out(o)
+
+
+@app.patch("/api/office-map/{oid}")
+def update_office_map(oid: int, data: dict, db: Session = Depends(get_db)):
+    o = db.query(OfficePhoneMap).filter(OfficePhoneMap.id == oid).first()
+    if not o: raise HTTPException(404, "Not found")
+    from office_map import normalize_phone
+    for k, v in data.items():
+        if k in ("id", "created_at"):
+            continue
+        if k == "phone_number":
+            v = normalize_phone(v)
+            if not v:
+                raise HTTPException(400, "Invalid phone number")
+            # guard against collision with another row
+            clash = (db.query(OfficePhoneMap)
+                       .filter(OfficePhoneMap.phone_number == v,
+                               OfficePhoneMap.id != oid).first())
+            if clash:
+                raise HTTPException(400, f"{v} is already mapped")
+        if hasattr(o, k):
+            setattr(o, k, v)
+    db.commit(); db.refresh(o)
+    return _office_out(o)
+
+
+@app.delete("/api/office-map/{oid}", status_code=204)
+def delete_office_map(oid: int, db: Session = Depends(get_db)):
+    o = db.query(OfficePhoneMap).filter(OfficePhoneMap.id == oid).first()
+    if not o: raise HTTPException(404, "Not found")
+    db.delete(o); db.commit()
+
+
+@app.get("/api/office-map/resolve")
+def resolve_office(to_number: str, db: Session = Depends(get_db)):
+    """Test helper: see which office a dialed number maps to."""
+    from office_map import resolve_office_id
+    return resolve_office_id(db, to_number)
+
+
+def _office_out(o: OfficePhoneMap) -> dict:
+    return {
+        "id": o.id, "phone_number": o.phone_number,
+        "office_id": o.office_id, "office_name": o.office_name,
+        "project_id": o.project_id, "is_active": o.is_active,
+        "created_at": o.created_at,
+    }
+
+
+# ── Denticon practice reference (cached production types/providers/operatories) ─
+
+@app.get("/api/reference")
+def list_reference(office_id: Optional[str] = None, ref_type: Optional[str] = None,
+                   db: Session = Depends(get_db)):
+    from database import DenticonReference
+    q = db.query(DenticonReference)
+    if office_id: q = q.filter(DenticonReference.office_id == str(office_id))
+    if ref_type:  q = q.filter(DenticonReference.ref_type == ref_type)
+    rows = q.order_by(DenticonReference.office_id, DenticonReference.ref_type,
+                      DenticonReference.name).all()
+    return [{
+        "id": r.id, "office_id": r.office_id, "ref_type": r.ref_type,
+        "ref_id": r.ref_id, "name": r.name, "duration": r.duration,
+        "bookable": r.bookable, "updated_at": r.updated_at,
+    } for r in rows]
+
+
+@app.post("/api/reference/refresh")
+async def refresh_reference(office_id: Optional[str] = None):
+    """Pull fresh production types / providers / operatories from Denticon."""
+    from actions import refresh_practice_reference
+    from database import SessionLocal
     db = SessionLocal()
     try:
-        yield db
+        return await refresh_practice_reference(office_id=office_id, __db__=db)
     finally:
         db.close()
 
-def hash_password(password: str):
-    return pwd_context.hash(password)
 
-def verify_password(plain, hashed):
-    return pwd_context.verify(plain, hashed)
+# ── Admin Tools ───────────────────────────────────────────────────────────────
 
-def create_token(data: dict, expires_delta=None):
-    to_encode = data.copy()
-    expire = datetime.utcnow() + (expires_delta or timedelta(minutes=15))
-    to_encode.update({"exp": expire})
-    return jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
-
-def get_current_user(token: str = Depends(oauth2_scheme), db: Session = Depends(get_db)):
-    credentials_exception = HTTPException(status_code=401, detail="Could not validate credentials")
-    try:
-        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
-        email: str = payload.get("sub")
-        if email is None:
-            raise credentials_exception
-    except JWTError:
-        raise credentials_exception
-    user = db.query(models.User).filter(models.User.email == email).first()
-    if user is None:
-        raise credentials_exception
-    return user
-
-def get_admin_user(current_user: models.User = Depends(get_current_user)):
-    if not current_user.is_admin:
-        raise HTTPException(status_code=403, detail="Admin access required")
-    return current_user
-
-def send_order_email(to_email: str, customer_name: str, order: models.Order, items: list):
-    if not SMTP_USER:
-        print(f"[EMAIL SKIPPED - no SMTP config] Order #{order.id} to {to_email}")
-        return
-    try:
-        msg = MIMEMultipart("alternative")
-        msg["Subject"] = f"TubRent Booking Confirmed — Order #{order.id}"
-        msg["From"] = FROM_EMAIL
-        msg["To"] = to_email
-
-        items_html = ""
-        for item in items:
-            items_html += f"""
-            <tr>
-                <td style="padding:8px 12px;border-bottom:1px solid #eee">{item['product_name']}</td>
-                <td style="padding:8px 12px;border-bottom:1px solid #eee;text-align:center">{item['quantity']}</td>
-                <td style="padding:8px 12px;border-bottom:1px solid #eee;text-align:right">${item['unit_price']:.2f}/day</td>
-                <td style="padding:8px 12px;border-bottom:1px solid #eee;text-align:right">${item['subtotal']:.2f}</td>
-            </tr>"""
-
-        html = f"""
-        <html><body style="font-family:'Helvetica Neue',Arial,sans-serif;background:#f5f5f0;margin:0;padding:0">
-        <div style="max-width:600px;margin:40px auto;background:#fff;border-radius:8px;overflow:hidden;box-shadow:0 2px 16px rgba(0,0,0,0.08)">
-            <div style="background:#1a1a1a;padding:32px 40px">
-                <h1 style="color:#f0e68c;margin:0;font-size:28px;letter-spacing:2px">TUBRENT</h1>
-                <p style="color:#aaa;margin:4px 0 0">Storage Tub Rental Co.</p>
-            </div>
-            <div style="padding:40px">
-                <h2 style="color:#1a1a1a;margin:0 0 8px">Booking Confirmed!</h2>
-                <p style="color:#666">Hi {customer_name}, your rental booking has been received.</p>
-                <div style="background:#f9f9f6;border-radius:6px;padding:20px;margin:24px 0">
-                    <p style="margin:0 0 4px;color:#999;font-size:12px;text-transform:uppercase;letter-spacing:1px">Order Details</p>
-                    <p style="margin:0;font-size:20px;font-weight:700;color:#1a1a1a">Order #{order.id}</p>
-                    <p style="margin:4px 0 0;color:#666">Placed: {order.created_at.strftime('%B %d, %Y at %I:%M %p')}</p>
-                    <p style="margin:4px 0 0;color:#666">Rental Period: <strong>{order.rental_start_date}</strong> → <strong>{order.rental_end_date}</strong></p>
-                </div>
-                <table style="width:100%;border-collapse:collapse;margin:16px 0">
-                    <thead>
-                        <tr style="background:#f5f5f0">
-                            <th style="padding:10px 12px;text-align:left;font-size:11px;text-transform:uppercase;letter-spacing:1px;color:#666">Item</th>
-                            <th style="padding:10px 12px;text-align:center;font-size:11px;text-transform:uppercase;letter-spacing:1px;color:#666">Qty</th>
-                            <th style="padding:10px 12px;text-align:right;font-size:11px;text-transform:uppercase;letter-spacing:1px;color:#666">Rate</th>
-                            <th style="padding:10px 12px;text-align:right;font-size:11px;text-transform:uppercase;letter-spacing:1px;color:#666">Subtotal</th>
-                        </tr>
-                    </thead>
-                    <tbody>{items_html}</tbody>
-                </table>
-                <div style="text-align:right;border-top:2px solid #1a1a1a;padding-top:12px;margin-top:8px">
-                    <span style="font-size:18px;font-weight:700">Total: ${order.total_amount:.2f}</span>
-                </div>
-                {f'<div style="margin-top:24px;padding:16px;background:#fffbea;border-left:4px solid #f0e68c;border-radius:4px"><p style="margin:0;color:#666"><strong>Notes:</strong> {order.notes}</p></div>' if order.notes else ''}
-                <p style="margin:32px 0 0;color:#999;font-size:13px">Payment is due at pickup. We will contact you to coordinate delivery/pickup logistics. Questions? Reply to this email.</p>
-            </div>
-        </div>
-        </body></html>"""
-
-        msg.attach(MIMEText(html, "html"))
-        with smtplib.SMTP(SMTP_HOST, SMTP_PORT) as server:
-            server.starttls()
-            server.login(SMTP_USER, SMTP_PASS)
-            server.sendmail(FROM_EMAIL, [to_email, ADMIN_EMAIL], msg.as_string())
-        print(f"Email sent to {to_email}")
-    except Exception as e:
-        print(f"Email error: {e}")
+@app.get("/api/tools")
+def get_tools():
+    from admin_tools import list_tools
+    return {"tools": list_tools()}
 
 
-# AUTH
-
-@app.post("/api/auth/register", response_model=schemas.UserOut)
-def register(user: schemas.UserCreate, db: Session = Depends(get_db)):
-    if db.query(models.User).filter(models.User.email == user.email).first():
-        raise HTTPException(status_code=400, detail="Email already registered")
-    db_user = models.User(
-        email=user.email,
-        name=user.name,
-        phone=user.phone,
-        hashed_password=hash_password(user.password),
-    )
-    db.add(db_user)
-    db.commit()
-    db.refresh(db_user)
-    return db_user
-
-@app.post("/api/auth/login", response_model=schemas.Token)
-def login(form_data: OAuth2PasswordRequestForm = Depends(), db: Session = Depends(get_db)):
-    user = db.query(models.User).filter(models.User.email == form_data.username).first()
-    if not user or not verify_password(form_data.password, user.hashed_password):
-        raise HTTPException(status_code=401, detail="Incorrect email or password")
-    token = create_token({"sub": user.email}, timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES))
-    return {"access_token": token, "token_type": "bearer", "user": schemas.UserOut.from_orm(user)}
-
-@app.get("/api/auth/me", response_model=schemas.UserOut)
-def me(current_user: models.User = Depends(get_current_user)):
-    return current_user
+class ToolRun(BaseModel):
+    params: Optional[dict] = {}
 
 
-# PRODUCTS
-
-@app.get("/api/products", response_model=List[schemas.ProductOut])
-def list_products(db: Session = Depends(get_db)):
-    return db.query(models.Product).filter(models.Product.is_active == True).all()
-
-@app.get("/api/products/{product_id}", response_model=schemas.ProductOut)
-def get_product(product_id: int, db: Session = Depends(get_db)):
-    p = db.query(models.Product).filter(models.Product.id == product_id).first()
-    if not p:
-        raise HTTPException(status_code=404, detail="Product not found")
-    return p
-
-@app.post("/api/admin/products", response_model=schemas.ProductOut)
-def create_product(
-    name: str = Form(...),
-    description: str = Form(...),
-    price_per_day: float = Form(...),
-    quantity_available: int = Form(...),
-    size_dimensions: str = Form(""),
-    weight_capacity: str = Form(""),
-    color: str = Form(""),
-    category: str = Form(""),
-    is_active: bool = Form(True),
-    image: UploadFile = File(None),
-    db: Session = Depends(get_db),
-    admin: models.User = Depends(get_admin_user),
-):
-    image_url = None
-    if image and image.filename:
-        image_url = upload_image_to_cloudinary(image)
-
-    product = models.Product(
-        name=name, description=description, price_per_day=price_per_day,
-        quantity_available=quantity_available, size_dimensions=size_dimensions,
-        weight_capacity=weight_capacity, color=color, category=category,
-        is_active=is_active, image_url=image_url,
-    )
-    db.add(product)
-    db.commit()
-    db.refresh(product)
-    return product
-
-@app.put("/api/admin/products/{product_id}", response_model=schemas.ProductOut)
-def update_product(
-    product_id: int,
-    name: str = Form(...),
-    description: str = Form(...),
-    price_per_day: float = Form(...),
-    quantity_available: int = Form(...),
-    size_dimensions: str = Form(""),
-    weight_capacity: str = Form(""),
-    color: str = Form(""),
-    category: str = Form(""),
-    is_active: bool = Form(True),
-    image: UploadFile = File(None),
-    db: Session = Depends(get_db),
-    admin: models.User = Depends(get_admin_user),
-):
-    product = db.query(models.Product).filter(models.Product.id == product_id).first()
-    if not product:
-        raise HTTPException(status_code=404, detail="Product not found")
-
-    if image and image.filename:
-        product.image_url = upload_image_to_cloudinary(image)
-
-    product.name = name
-    product.description = description
-    product.price_per_day = price_per_day
-    product.quantity_available = quantity_available
-    product.size_dimensions = size_dimensions
-    product.weight_capacity = weight_capacity
-    product.color = color
-    product.category = category
-    product.is_active = is_active
-    db.commit()
-    db.refresh(product)
-    return product
-
-@app.delete("/api/admin/products/{product_id}")
-def delete_product(product_id: int, db: Session = Depends(get_db), admin: models.User = Depends(get_admin_user)):
-    product = db.query(models.Product).filter(models.Product.id == product_id).first()
-    if not product:
-        raise HTTPException(status_code=404, detail="Product not found")
-    product.is_active = False
-    db.commit()
-    return {"ok": True}
-
-
-# ORDERS
-
-@app.post("/api/orders", response_model=schemas.OrderOut)
-def create_order(order_data: schemas.OrderCreate, db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)):
-    total = 0.0
-    validated_items = []
-
-    for item in order_data.items:
-        product = db.query(models.Product).filter(models.Product.id == item.product_id).first()
-        if not product:
-            raise HTTPException(status_code=404, detail=f"Product {item.product_id} not found")
-        if item.quantity > product.quantity_available:
-            raise HTTPException(status_code=400, detail=f"Only {product.quantity_available} units of '{product.name}' available")
-
-        start = datetime.strptime(order_data.rental_start_date, "%Y-%m-%d")
-        end = datetime.strptime(order_data.rental_end_date, "%Y-%m-%d")
-        days = max(1, (end - start).days)
-        subtotal = product.price_per_day * item.quantity * days
-        total += subtotal
-        validated_items.append({"product": product, "quantity": item.quantity, "days": days, "subtotal": subtotal})
-
-    order = models.Order(
-        user_id=current_user.id,
-        rental_start_date=order_data.rental_start_date,
-        rental_end_date=order_data.rental_end_date,
-        notes=order_data.notes,
-        total_amount=total,
-        status="pending",
-    )
-    db.add(order)
-    db.flush()
-
-    email_items = []
-    for vi in validated_items:
-        oi = models.OrderItem(
-            order_id=order.id,
-            product_id=vi["product"].id,
-            quantity=vi["quantity"],
-            unit_price=vi["product"].price_per_day,
-            subtotal=vi["subtotal"],
-        )
-        db.add(oi)
-        email_items.append({
-            "product_name": vi["product"].name,
-            "quantity": vi["quantity"],
-            "unit_price": vi["product"].price_per_day,
-            "subtotal": vi["subtotal"],
-        })
-
-    db.commit()
-    db.refresh(order)
-
-    send_order_email(current_user.email, current_user.name, order, email_items)
-    return order
-
-@app.get("/api/orders/my", response_model=List[schemas.OrderOut])
-def my_orders(db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)):
-    return db.query(models.Order).filter(models.Order.user_id == current_user.id).order_by(models.Order.created_at.desc()).all()
-
-@app.get("/api/admin/orders", response_model=List[schemas.OrderAdminOut])
-def admin_orders(db: Session = Depends(get_db), admin: models.User = Depends(get_admin_user)):
-    return db.query(models.Order).order_by(models.Order.created_at.desc()).all()
-
-@app.put("/api/admin/orders/{order_id}/status")
-def update_order_status(order_id: int, payload: schemas.StatusUpdate, db: Session = Depends(get_db), admin: models.User = Depends(get_admin_user)):
-    order = db.query(models.Order).filter(models.Order.id == order_id).first()
-    if not order:
-        raise HTTPException(status_code=404, detail="Order not found")
-    order.status = payload.status
-    db.commit()
-    return {"ok": True}
-
-@app.get("/api/admin/users", response_model=List[schemas.UserOut])
-def admin_users(db: Session = Depends(get_db), admin: models.User = Depends(get_admin_user)):
-    return db.query(models.User).all()
-
-
-# SEED ADMIN
-
-@app.on_event("startup")
-def seed():
+@app.post("/api/tools/{key}/run")
+async def run_admin_tool(key: str, body: ToolRun = ToolRun()):
+    from admin_tools import run_tool
+    from database import SessionLocal
     db = SessionLocal()
-    admin_email = os.getenv("ADMIN_EMAIL", "admin@tubrent.com")
-    if not db.query(models.User).filter(models.User.email == admin_email).first():
-        admin = models.User(
-            email=admin_email,
-            name="Admin",
-            hashed_password=hash_password(os.getenv("ADMIN_PASSWORD", "admin123")),
-            is_admin=True,
-        )
-        db.add(admin)
-        db.commit()
-        print(f"Admin seeded: {admin_email}")
-    db.close()
+    try:
+        return await run_tool(key, body.params or {}, db)
+    finally:
+        db.close()
+
+
+# ── Endpoints (API connections) ───────────────────────────────────────────────
+
+class EndpointCreate(BaseModel):
+    name: str
+    base_url: str
+    auth_type: str = "bearer"
+    project_id: Optional[int] = None
+    token_url: Optional[str] = None
+    client_id: Optional[str] = None
+    client_secret: Optional[str] = None
+    token_scope: Optional[str] = None
+    api_key: Optional[str] = None
+    api_key_header: Optional[str] = "X-API-Key"
+    extra_headers: Optional[dict] = {}
+    default_timeout: Optional[int] = 30
+
+
+@app.get("/api/endpoints")
+def list_endpoints(db: Session = Depends(get_db)):
+    rows = db.query(APIEndpoint).all()
+    return [_endpoint_out(e) for e in rows]
+
+
+@app.post("/api/endpoints", status_code=201)
+def create_endpoint(data: EndpointCreate, db: Session = Depends(get_db)):
+    e = APIEndpoint(**data.model_dump())
+    db.add(e); db.commit(); db.refresh(e)
+    return _endpoint_out(e)
+
+
+@app.get("/api/endpoints/{eid}")
+def get_endpoint(eid: int, db: Session = Depends(get_db)):
+    e = db.query(APIEndpoint).filter(APIEndpoint.id == eid).first()
+    if not e: raise HTTPException(404, "Not found")
+    return _endpoint_out(e)
+
+
+@app.patch("/api/endpoints/{eid}")
+def update_endpoint(eid: int, data: dict, db: Session = Depends(get_db)):
+    e = db.query(APIEndpoint).filter(APIEndpoint.id == eid).first()
+    if not e: raise HTTPException(404, "Not found")
+
+    # Never let these be set directly from the client.
+    protected = {"id", "current_token", "token_expires_at", "created_at"}
+    # Changing any of these invalidates the cached token.
+    auth_fields = {"auth_type", "token_url", "client_id", "client_secret",
+                   "token_scope", "api_key", "api_key_header", "base_url"}
+    auth_changed = False
+
+    for k, v in data.items():
+        if k in protected:
+            continue
+        if hasattr(e, k):
+            if k in auth_fields and getattr(e, k) != v:
+                auth_changed = True
+            setattr(e, k, v)
+
+    # Force a fresh token on next call if credentials/auth changed.
+    if auth_changed:
+        e.current_token = None
+        e.token_expires_at = None
+
+    db.commit(); db.refresh(e)
+    return _endpoint_out(e)
+
+
+@app.delete("/api/endpoints/{eid}", status_code=204)
+def delete_endpoint(eid: int, db: Session = Depends(get_db)):
+    e = db.query(APIEndpoint).filter(APIEndpoint.id == eid).first()
+    if not e: raise HTTPException(404, "Not found")
+    db.delete(e); db.commit()
+
+
+@app.post("/api/endpoints/{eid}/test")
+async def test_endpoint(eid: int, db: Session = Depends(get_db)):
+    """Manually fire a token refresh to verify credentials."""
+    e = db.query(APIEndpoint).filter(APIEndpoint.id == eid).first()
+    if not e: raise HTTPException(404, "Not found")
+    from token_manager import TokenManager
+    tm = TokenManager(db)
+    token = await tm.get_token(e)
+    return {"success": bool(token), "token_preview": (token or "")[:20] + "..." if token else None,
+            "expires_at": e.token_expires_at}
+
+
+def _endpoint_out(e: APIEndpoint) -> dict:
+    return {
+        "id": e.id, "name": e.name, "base_url": e.base_url,
+        "auth_type": e.auth_type, "token_url": e.token_url,
+        "client_id": e.client_id,
+        "api_key_header": e.api_key_header,
+        "extra_headers": e.extra_headers,
+        "default_timeout": e.default_timeout,
+        "is_active": e.is_active,
+        "project_id": e.project_id,
+        "project_name": e.project.name if e.project else None,
+        "project_color": e.project.color if e.project else None,
+        "token_expires_at": e.token_expires_at,
+        "created_at": e.created_at,
+        "updated_at": e.updated_at,
+    }
+
+
+# ── Call Logs ─────────────────────────────────────────────────────────────────
+
+@app.get("/api/logs")
+def list_logs(
+    endpoint_name: Optional[str] = None,
+    success: Optional[bool] = None,
+    limit: int = Query(50, le=500),
+    offset: int = 0,
+    db: Session = Depends(get_db),
+):
+    q = db.query(APICallLog).order_by(APICallLog.created_at.desc())
+    if endpoint_name: q = q.filter(APICallLog.endpoint_name == endpoint_name)
+    if success is not None: q = q.filter(APICallLog.success == success)
+    total = q.count()
+    rows = q.offset(offset).limit(limit).all()
+    return {"total": total, "items": [_log_out(r) for r in rows]}
+
+
+@app.get("/api/logs/{log_id}")
+def get_log(log_id: int, db: Session = Depends(get_db)):
+    r = db.query(APICallLog).filter(APICallLog.id == log_id).first()
+    if not r: raise HTTPException(404, "Not found")
+    return _log_out(r, full=True)
+
+
+def _log_out(r: APICallLog, full=False) -> dict:
+    d = {
+        "id": r.id, "endpoint_name": r.endpoint_name,
+        "method": r.method, "url": r.url,
+        "status_code": r.status_code,
+        "success": r.success, "response_time_ms": r.response_time_ms,
+        "triggered_by": r.triggered_by, "token_refreshed": r.token_refreshed,
+        "created_at": r.created_at, "error_message": r.error_message,
+    }
+    if full:
+        d.update({
+            "request_headers": r.request_headers,
+            "request_body": r.request_body,
+            "response_headers": r.response_headers,
+            "response_body": r.response_body,
+        })
+    return d
+
+
+# ── Stats / dashboard ─────────────────────────────────────────────────────────
+
+@app.get("/api/stats")
+def get_stats(db: Session = Depends(get_db)):
+    from sqlalchemy import func
+    total_calls = db.query(APICallLog).count()
+    success_calls = db.query(APICallLog).filter(APICallLog.success == True).count()
+    fail_calls = total_calls - success_calls
+    avg_rt = db.query(func.avg(APICallLog.response_time_ms)).scalar() or 0
+    total_jobs = db.query(JobDefinition).count()
+    active_jobs = db.query(JobDefinition).filter(JobDefinition.is_active == True).count()
+    recent_runs = db.query(JobRunLog).order_by(JobRunLog.started_at.desc()).limit(5).all()
+    webhook_count = db.query(WebhookEvent).count()
+    return {
+        "calls": {"total": total_calls, "success": success_calls, "failed": fail_calls,
+                  "avg_response_ms": round(float(avg_rt), 1)},
+        "jobs": {"total": total_jobs, "active": active_jobs},
+        "webhooks": {"total": webhook_count},
+        "recent_job_runs": [
+            {"job_name": r.job_name, "success": r.success,
+             "triggered_by": r.triggered_by, "started_at": r.started_at}
+            for r in recent_runs
+        ],
+    }
+
+
+# ── Jobs ──────────────────────────────────────────────────────────────────────
+
+class JobCreate(BaseModel):
+    name: str
+    description: Optional[str] = None
+    job_type: str   # cron | interval | onetime | webhook
+    schedule: Optional[str] = None
+    run_at: Optional[datetime] = None
+    action: str
+    action_params: Optional[dict] = {}
+    webhook_secret: Optional[str] = None
+
+
+@app.get("/api/jobs")
+def list_jobs(db: Session = Depends(get_db)):
+    jobs = db.query(JobDefinition).order_by(JobDefinition.created_at.desc()).all()
+    return [_job_out(j) for j in jobs]
+
+
+@app.post("/api/jobs", status_code=201)
+def create_job(data: JobCreate, db: Session = Depends(get_db)):
+    j = scheduler_service.add_job(db, data.model_dump())
+    return _job_out(j)
+
+
+@app.patch("/api/jobs/{jid}")
+def update_job(jid: int, data: dict, db: Session = Depends(get_db)):
+    j = scheduler_service.update_job(db, jid, data)
+    if not j: raise HTTPException(404, "Not found")
+    return _job_out(j)
+
+
+@app.delete("/api/jobs/{jid}", status_code=204)
+def delete_job(jid: int, db: Session = Depends(get_db)):
+    if not scheduler_service.delete_job(db, jid):
+        raise HTTPException(404, "Not found")
+
+
+@app.post("/api/jobs/{jid}/pause")
+def pause_job(jid: int):
+    scheduler_service.pause_job(jid)
+    return {"paused": True}
+
+
+@app.post("/api/jobs/{jid}/resume")
+def resume_job(jid: int):
+    scheduler_service.resume_job(jid)
+    return {"resumed": True}
+
+
+@app.post("/api/jobs/{jid}/run")
+async def run_job_now(jid: int, db: Session = Depends(get_db)):
+    j = db.query(JobDefinition).filter(JobDefinition.id == jid).first()
+    if not j: raise HTTPException(404, "Not found")
+    result = await scheduler_service.trigger_job(j.name, triggered_by="manual")
+    return result
+
+
+@app.get("/api/job-runs")
+def list_job_runs(
+    job_name: Optional[str] = None,
+    limit: int = Query(50, le=200),
+    offset: int = 0,
+    db: Session = Depends(get_db),
+):
+    q = db.query(JobRunLog).order_by(JobRunLog.started_at.desc())
+    if job_name: q = q.filter(JobRunLog.job_name == job_name)
+    total = q.count()
+    rows = q.offset(offset).limit(limit).all()
+    return {"total": total, "items": [_run_out(r) for r in rows]}
+
+
+@app.get("/api/actions")
+def list_actions():
+    """Return registered action names for the job builder UI."""
+    return {"actions": list(JOB_REGISTRY.keys())}
+
+
+def _job_out(j: JobDefinition) -> dict:
+    return {
+        "id": j.id, "name": j.name, "description": j.description,
+        "job_type": j.job_type, "schedule": j.schedule, "run_at": j.run_at,
+        "action": j.action, "action_params": j.action_params,
+        "is_active": j.is_active, "run_count": j.run_count,
+        "fail_count": j.fail_count, "last_run_at": j.last_run_at,
+        "next_run_at": j.next_run_at, "created_at": j.created_at,
+    }
+
+
+def _run_out(r: JobRunLog) -> dict:
+    return {
+        "id": r.id, "job_name": r.job_name, "triggered_by": r.triggered_by,
+        "started_at": r.started_at, "finished_at": r.finished_at,
+        "success": r.success, "result": r.result, "error": r.error,
+        "duration_ms": r.duration_ms, "context": r.context,
+    }
+
+
+# ── Webhook Events ────────────────────────────────────────────────────────────
+
+@app.get("/api/webhook-events")
+def list_webhook_events(
+    source: Optional[str] = None,
+    limit: int = Query(50, le=200),
+    offset: int = 0,
+    db: Session = Depends(get_db),
+):
+    q = db.query(WebhookEvent).order_by(WebhookEvent.created_at.desc())
+    if source: q = q.filter(WebhookEvent.source == source)
+    total = q.count()
+    rows = q.offset(offset).limit(limit).all()
+    return {"total": total, "items": [
+        {"id": r.id, "source": r.source, "source_id": r.source_id,
+         "job_triggered": r.job_triggered, "job_run_success": r.job_run_success,
+         "job_error": r.job_error, "ip_address": r.ip_address, "created_at": r.created_at}
+        for r in rows
+    ]}
+
+
+# ── Settings ──────────────────────────────────────────────────────────────────
+
+@app.get("/api/settings")
+def list_settings(db: Session = Depends(get_db)):
+    rows = db.query(AppSetting).all()
+    return {r.key: {"value": r.value, "description": r.description} for r in rows}
+
+
+@app.put("/api/settings/{key}")
+def upsert_setting(key: str, body: dict, db: Session = Depends(get_db)):
+    s = db.query(AppSetting).filter(AppSetting.key == key).first()
+    if s:
+        s.value = body.get("value", s.value)
+        if "description" in body: s.description = body["description"]
+    else:
+        s = AppSetting(key=key, value=body.get("value"), description=body.get("description"))
+        db.add(s)
+    db.commit()
+    return {"key": key, "value": s.value}
+
+
+# ── Manual API call ───────────────────────────────────────────────────────────
+
+class ManualCallRequest(BaseModel):
+    endpoint_name: str
+    method: str = "GET"
+    path: str
+    params: Optional[dict] = None
+    body: Optional[Any] = None
+
+
+@app.post("/api/call")
+async def manual_call(req: ManualCallRequest, db: Session = Depends(get_db)):
+    caller = APICaller(db)
+    result = await caller.call(
+        req.endpoint_name, req.method, req.path,
+        params=req.params, body=req.body, triggered_by="manual_ui"
+    )
+    return result
+
+
+# ── Health check (Railway uses this) ─────────────────────────────────────────
+
+@app.get("/health")
+def health():
+    return {"status": "ok"}
+
+
+# ── Login / Logout ────────────────────────────────────────────────────────────
+
+_LOGIN_PAGE = """<!DOCTYPE html>
+<html lang="en"><head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Sign in · API Gateway</title>
+<style>
+  :root {{ --bg:#0d1117; --surface:#161b22; --border:#30363d; --text:#e6edf3;
+           --muted:#7d8590; --accent:#2f81f7; --red:#f85149; }}
+  * {{ box-sizing:border-box; margin:0; padding:0; }}
+  body {{ background:var(--bg); color:var(--text); min-height:100vh;
+          display:flex; align-items:center; justify-content:center;
+          font-family:'Inter',system-ui,sans-serif; }}
+  .card {{ background:var(--surface); border:1px solid var(--border);
+           border-radius:12px; padding:36px 32px; width:340px; }}
+  .logo {{ display:flex; align-items:center; gap:10px; margin-bottom:24px; }}
+  .logo .icon {{ width:36px; height:36px; background:var(--accent); border-radius:9px;
+                 display:flex; align-items:center; justify-content:center; font-size:18px; }}
+  .logo h1 {{ font-size:16px; font-weight:600; }}
+  .logo span {{ font-size:12px; color:var(--muted); display:block; }}
+  label {{ font-size:12px; color:var(--muted); display:block; margin-bottom:6px; }}
+  input {{ width:100%; background:#1c2128; border:1px solid var(--border); border-radius:7px;
+           color:var(--text); padding:10px 12px; font-size:14px; outline:none; margin-bottom:16px; }}
+  input:focus {{ border-color:var(--accent); }}
+  button {{ width:100%; background:var(--accent); color:#fff; border:none; border-radius:7px;
+            padding:11px; font-size:14px; font-weight:500; cursor:pointer; }}
+  button:hover {{ background:#1f6feb; }}
+  .err {{ background:rgba(248,81,73,0.1); border:1px solid rgba(248,81,73,0.3);
+          color:var(--red); font-size:13px; padding:9px 12px; border-radius:7px; margin-bottom:16px; }}
+</style></head><body>
+  <form class="card" method="post" action="/login">
+    <div class="logo">
+      <div class="icon">⚡</div>
+      <div><h1>API Gateway</h1><span>Sign in to continue</span></div>
+    </div>
+    {error}
+    <label>Username</label>
+    <input name="username" autocomplete="username" autofocus required>
+    <label>Password</label>
+    <input name="password" type="password" autocomplete="current-password" required>
+    <button type="submit">Sign in</button>
+  </form>
+</body></html>"""
+
+
+@app.get("/login", response_class=HTMLResponse)
+def login_page(request: Request):
+    if not _AUTH_ENABLED or request.session.get("authed"):
+        return RedirectResponse(url="/", status_code=302)
+    return HTMLResponse(_LOGIN_PAGE.format(error=""))
+
+
+@app.post("/login", response_class=HTMLResponse)
+def login_submit(request: Request,
+                 username: str = Form(...), password: str = Form(...)):
+    ok = (
+        secrets.compare_digest(username.encode(), _DASH_USER.encode())
+        and secrets.compare_digest(password.encode(), _DASH_PASS.encode())
+    )
+    if ok:
+        request.session["authed"] = True
+        request.session["user"] = username
+        return RedirectResponse(url="/", status_code=302)
+    err = '<div class="err">Incorrect username or password.</div>'
+    return HTMLResponse(_LOGIN_PAGE.format(error=err), status_code=401)
+
+
+@app.get("/logout")
+def logout(request: Request):
+    request.session.clear()
+    return RedirectResponse(url="/login", status_code=302)
+
+
+@app.get("/api/me")
+def whoami(request: Request):
+    return {"user": request.session.get("user", _DASH_USER),
+            "auth_enabled": _AUTH_ENABLED}
+
+
+# ── Serve dashboard ───────────────────────────────────────────────────────────
+# The auth_gate middleware already protects this route.
+
+_STATIC_DIR = os.path.join(os.path.dirname(__file__), "static")
+
+@app.get("/")
+def serve_dashboard():
+    index = os.path.join(_STATIC_DIR, "index.html")
+    if os.path.exists(index):
+        return FileResponse(index)
+    return JSONResponse({"message": "API Gateway running — no frontend found"})
+
+if os.path.exists(_STATIC_DIR):
+    app.mount("/static", StaticFiles(directory=_STATIC_DIR), name="static")
