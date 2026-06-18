@@ -5,8 +5,7 @@ Proxy routes called by ins-verify-api instead of hitting Planet DDS directly.
 Uses the existing APICaller + TokenManager so credentials stay in the DB
 and all calls are logged in the gateway dashboard.
 
-Endpoint name controlled by DENTICON_ENDPOINT env var.
-Set in Railway → gateway service → Variables:
+Endpoint name controlled by DENTICON_ENDPOINT env var:
   DENTICON_ENDPOINT=denticon          (staging)
   DENTICON_ENDPOINT=denticon-prod     (production, when ready)
 """
@@ -30,7 +29,7 @@ def _verify_internal(request: Request):
         raise HTTPException(status_code=401, detail="Invalid internal API key")
 
 
-async def _call(method: str, path: str, params: dict = None) -> dict:
+async def _call(method: str, path: str, params: dict = None, body: dict = None) -> dict:
     """Makes an authenticated Denticon call via the existing APICaller."""
     db = SessionLocal()
     try:
@@ -40,6 +39,7 @@ async def _call(method: str, path: str, params: dict = None) -> dict:
             method,
             path,
             params=params,
+            body=body,
             triggered_by="ins-verify-proxy",
         )
         return result
@@ -53,7 +53,11 @@ async def proxy_appointments(
     office_id: str = Query(...),
     window_days: int = Query(3),
 ):
-    """Proxy to Denticon GetAppointments — called by ins-verify-api."""
+    """
+    Fetch scheduled appointments for an office within the next N days.
+    Denticon path: /denticon/appointments/v0/
+    Filter by OfficeId + date range.
+    """
     _verify_internal(request)
 
     from datetime import datetime, timedelta, timezone
@@ -76,7 +80,10 @@ async def proxy_appointments(
 
 @router.get("/patients/{patient_id}")
 async def proxy_patient(request: Request, patient_id: str):
-    """Proxy to Denticon GetPatient."""
+    """
+    Fetch patient demographics.
+    Denticon path: /denticon/patients/v0/{patient_id}
+    """
     _verify_internal(request)
     result = await _call("GET", f"/denticon/patients/v0/{patient_id}")
     return JSONResponse(content=result)
@@ -84,22 +91,26 @@ async def proxy_patient(request: Request, patient_id: str):
 
 @router.get("/insurance/{patient_id}")
 async def proxy_insurance(request: Request, patient_id: str):
-    """Proxy to Denticon GetPatientInsurance."""
+    """
+    Fetch patient insurance plans.
+    Denticon path: /denticon/patients/v0/{patient_id}/insurances
+    """
     _verify_internal(request)
-    result = await _call(
-        "GET",
-        f"/denticon/insurance/v0/patient/{patient_id}",
-    )
+    result = await _call("GET", f"/denticon/patients/v0/{patient_id}/insurances")
     return JSONResponse(content=result)
 
 
 @router.get("/providers/{office_id}")
 async def proxy_providers(request: Request, office_id: str):
-    """Proxy to Denticon GetProvidersByOffice — used to warm NPI cache."""
+    """
+    Fetch all providers for an office — used to warm NPI cache.
+    Denticon path: /denticon/practices/v0/providers?OfficeId=126
+    Confirmed working from actions.py refresh_practice_reference.
+    """
     _verify_internal(request)
     result = await _call(
         "GET",
-        "/denticon/providers/v0/",
+        "/denticon/practices/v0/providers",
         params={"OfficeId": office_id},
     )
     return JSONResponse(content=result)
