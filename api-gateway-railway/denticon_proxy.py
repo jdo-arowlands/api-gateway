@@ -17,9 +17,36 @@ from fastapi.responses import JSONResponse
 from database import SessionLocal
 from api_caller import APICaller
 from datetime import datetime, timedelta, timezone
+try:
+    from zoneinfo import ZoneInfo
+except ImportError:
+    from backports.zoneinfo import ZoneInfo
 import os
 
 router = APIRouter(prefix="/proxy/denticon", tags=["denticon-proxy"])
+# ── Timezone helper ───────────────────────────────────────────────────────────
+
+def _now_local() -> datetime:
+    """Returns current time in configured local timezone."""
+    tz_name = os.environ.get("TZ", "America/Chicago")
+    try:
+        tz = ZoneInfo(tz_name)
+        return datetime.now(tz)
+    except Exception:
+        return datetime.now(timezone.utc)
+
+
+def _format_local(dt: datetime) -> str:
+    """Formats a datetime in local timezone as a readable string."""
+    tz_name = os.environ.get("TZ", "America/Chicago")
+    try:
+        tz = ZoneInfo(tz_name)
+        local_dt = dt.astimezone(tz)
+        return local_dt.strftime("%Y-%m-%d %I:%M:%S %p %Z")
+    except Exception:
+        return dt.isoformat()
+
+
 
 GATEWAY_API_KEY = os.environ.get("GATEWAY_API_KEY", "")
 DENTICON_ENDPOINT = os.environ.get("DENTICON_ENDPOINT", "denticon")
@@ -122,7 +149,7 @@ def _map_appointment(appt: dict, office_id: str) -> dict | None:
             "secondary": None,
         },
         "verificationStatus": "PENDING",
-        "pulledAt": datetime.now(timezone.utc).isoformat(),
+        "pulledAt": _format_local(_now_local()),
     }
 
 
@@ -219,7 +246,30 @@ def _enrich_with_providers(records: list[dict], providers: list[dict]) -> list[d
     return records
 
 
-# ── Proxy endpoints ───────────────────────────────────────────────────────────
+# ── Proxy endpoints ─────────────────────────────────────────────────────────
+@router.get("/debug/appointments/{office_id}")
+async def debug_appointments(request: Request, office_id: str):
+    """Temporary debug endpoint — shows raw gateway response structure."""
+    _verify_internal(request)
+    result = await _call(
+        "GET",
+        "/denticon/appointments/v0/",
+        params={"OfficeId": office_id, "PageSize": 10, "PageNumber": 1},
+    )
+    # Show the structure without all the data
+    data = result.get("data") or {}
+    return JSONResponse(content={
+        "success": result.get("success"),
+        "status_code": result.get("status_code"),
+        "error": result.get("error"),
+        "top_level_keys": list(result.keys()),
+        "data_keys": list(data.keys()) if isinstance(data, dict) else f"data is {type(data).__name__}",
+        "data_data_type": type((data.get("data") if isinstance(data, dict) else None)).__name__,
+        "data_data_length": len(data.get("data") or []) if isinstance(data, dict) else 0,
+        "first_record_keys": list((data.get("data") or [{}])[0].keys()) if isinstance(data, dict) and data.get("data") else [],
+    })
+
+──
 
 @router.get("/appointments/upcoming")
 async def proxy_appointments(
@@ -258,7 +308,16 @@ async def proxy_appointments(
             "total": 0,
         })
 
-    raw_appointments = (appt_result.get("data") or {}).get("data") or []
+    # APICaller wraps response as result["data"] = Denticon response body
+    # Denticon response body has appointments in body["data"]
+    # Handle both shapes defensively
+    _outer = appt_result.get("data") or {}
+    if isinstance(_outer, dict) and "data" in _outer:
+        raw_appointments = _outer.get("data") or []
+    elif isinstance(_outer, list):
+        raw_appointments = _outer
+    else:
+        raw_appointments = []
 
     # Filter appointments to only the window
     # Denticon ignores StartDate/EndDate params so we filter in Python.
@@ -286,7 +345,7 @@ async def proxy_appointments(
             "success": True,
             "patients": [],
             "total": 0,
-            "pulledAt": datetime.now(timezone.utc).isoformat(),
+            "pulledAt": _format_local(_now_local()),
         })
 
     # Fetch providers to enrich with names + NPIs
@@ -306,7 +365,7 @@ async def proxy_appointments(
         "success": True,
         "patients": records,
         "total": len(records),
-        "pulledAt": datetime.now(timezone.utc).isoformat(),
+        "pulledAt": _format_local(_now_local()),
         "officeId": office_id,
         "windowDays": window_days,
     })
