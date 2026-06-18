@@ -1540,7 +1540,7 @@ async function testEndpoint(id, name) {
     const r = await api(`/api/endpoints/${id}/test`, 'POST');
     toast(`${name}: ${r.success ? 'Token OK ✓' : 'Failed - ' + (r.error || 'check config')}`,
           r.success ? 'success' : 'error');
-    if (r.success) loadEndpoints(); // refresh table to show updated token expiry
+    if (r.success) loadEndpoints();
   } catch(e) { toast(e.message, 'error'); }
 }
 
@@ -2020,7 +2020,6 @@ function closeDrawer() {
 
 function fmtTime(ts) {
   if (!ts) return '—';
-  // Ensure UTC strings are parsed correctly
   const normalized = ts.endsWith('Z') || ts.includes('+') ? ts : ts + 'Z';
   return new Date(normalized).toLocaleString('en-US', {
     month: 'short', day: 'numeric',
