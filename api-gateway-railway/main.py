@@ -14,12 +14,14 @@ from pydantic import BaseModel
 from typing import Any, Optional
 from datetime import datetime
 from sqlalchemy.orm import Session
+from denticon_proxy import router as denticon_proxy_router
+app.include_router(denticon_proxy_router)
+
 from database import get_db, APIEndpoint, APICallLog, AppSetting, SessionLocal, Project, OfficePhoneMap
 import actions  # noqa — registers all @register_action decorators on startup
 from api_caller import APICaller
 from scheduler import scheduler_service, JobDefinition, JobRunLog, JOB_REGISTRY, register_action
 from webhooks import router as webhook_router, WebhookEvent
-from denticon_proxy import router as denticon_proxy_router
 
 # ── Dashboard login ───────────────────────────────────────────────────────────
 # Single shared admin login. Set these in Railway → Variables.
@@ -95,17 +97,14 @@ app.add_middleware(CORSMiddleware,
 @app.middleware("http")
 async def auth_gate(request: Request, call_next):
     """Block every non-public path unless the session is logged in."""
-    path = request.url.path
-    public = _is_public(path)
-    logger.info(f"AUTH_GATE path={repr(path)} public={public} auth_enabled={_AUTH_ENABLED}")
-    if not _AUTH_ENABLED or public:
+    if not _AUTH_ENABLED or _is_public(request.url.path):
         return await call_next(request)
 
     if request.session.get("authed"):
         return await call_next(request)
 
     # Not logged in. API calls get a clean 401; browser navigations get redirected.
-    if path.startswith("/api"):
+    if request.url.path.startswith("/api"):
         return JSONResponse({"detail": "Not authenticated"}, status_code=401)
     return RedirectResponse(url="/login", status_code=302)
 
@@ -123,7 +122,6 @@ app.add_middleware(
 
 
 app.include_router(webhook_router)
-app.include_router(denticon_proxy_router)
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -405,6 +403,7 @@ async def test_endpoint(eid: int, db: Session = Depends(get_db)):
     from token_manager import TokenManager
     tm = TokenManager(db)
     token = await tm.get_token(e)
+    db.refresh(e)  # re-read from DB to get updated token_expires_at
     return {"success": bool(token), "token_preview": (token or "")[:20] + "..." if token else None,
             "expires_at": e.token_expires_at}
 
