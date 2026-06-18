@@ -1540,6 +1540,7 @@ async function testEndpoint(id, name) {
     const r = await api(`/api/endpoints/${id}/test`, 'POST');
     toast(`${name}: ${r.success ? 'Token OK ✓' : 'Failed - ' + (r.error || 'check config')}`,
           r.success ? 'success' : 'error');
+    if (r.success) loadEndpoints(); // refresh table to show updated token expiry
   } catch(e) { toast(e.message, 'error'); }
 }
 
