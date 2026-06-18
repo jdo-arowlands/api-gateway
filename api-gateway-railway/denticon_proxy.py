@@ -260,14 +260,19 @@ async def proxy_appointments(
 
     raw_appointments = (appt_result.get("data") or {}).get("data") or []
 
-    # Filter appointments to only the window (Denticon may ignore date params)
-    window_start = now.replace(tzinfo=timezone.utc)
-    window_end = end.replace(tzinfo=timezone.utc)
+    # Filter appointments to only the window
+    # Denticon ignores StartDate/EndDate params so we filter in Python.
+    # Strip timezone for naive comparison to avoid offset issues.
+    # Use 1-day lookback buffer to catch timezone edge cases.
+    window_start = now.replace(tzinfo=None) - timedelta(days=1)
+    window_end = end.replace(tzinfo=None)
     filtered = []
     for appt in raw_appointments:
         appt_date_str = appt.get("appointmentDate", "")
         try:
-            appt_date = datetime.fromisoformat(appt_date_str.replace("Z", "+00:00"))
+            appt_date = datetime.fromisoformat(
+                appt_date_str.replace("Z", "").replace("+00:00", "")
+            )
             if window_start <= appt_date <= window_end:
                 filtered.append(appt)
         except Exception:
