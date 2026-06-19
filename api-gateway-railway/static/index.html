@@ -575,6 +575,7 @@
       <button class="nav-item" onclick="showPage('projects')">
         📁 Projects <span class="badge" id="badge-projects">—</span>
       </button>
+      <button class="nav-item" onclick="showPage('operations')"><span class="nav-icon">⚡</span>Operations</button>
       <button class="nav-item" onclick="showPage('endpoints')">
         🔌 Endpoints <span class="badge" id="badge-endpoints">—</span>
       </button>
@@ -742,14 +743,14 @@
   <div class="modal-box" style="max-width:560px">
     <div class="modal-header">
       <h3 id="operation-modal-title">Add Operation</h3>
-      <button class="btn-close" onclick="closeOperationModal()">✕</button>
+      <button class="btn-close" onclick="closeOperationModal()">X</button>
     </div>
     <div class="modal-body">
       <input type="hidden" id="op-id">
       <div class="form-row">
         <label>Name (slug)</label>
         <input id="op-name" placeholder="denticon-appointments" class="form-input">
-        <small class="muted">Unique identifier used in code: caller.call_operation("denticon-appointments")</small>
+        <small class="muted">Unique identifier used in code e.g. denticon-appointments</small>
       </div>
       <div class="form-row">
         <label>Label</label>
@@ -778,7 +779,7 @@
       <div class="form-row">
         <label>Path</label>
         <input id="op-path" placeholder="/denticon/appointments/v0/" class="form-input mono">
-        <small class="muted">Use {patient_id} or {id} for path params e.g. /denticon/patients/v0/{patient_id}</small>
+        <small class="muted">Use {patient_id} for path params e.g. /denticon/patients/v0/{patient_id}</small>
       </div>
       <div class="form-row">
         <label>Default Params (JSON)</label>
@@ -1270,6 +1271,7 @@ const API = '';  // Same origin — set to 'http://localhost:8000' for dev
 
 // ── Navigation ────────────────────────────────────────────────────────────────
 function showPage(id) {
+  if (id === 'operations') loadOperations();
   document.querySelectorAll('.page').forEach(p => p.style.display = 'none');
   document.getElementById('page-' + id).style.display = 'block';
   document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
@@ -2155,18 +2157,18 @@ function copyText(elId) {
 loadDashboard();
 setInterval(loadDashboard, 30000);
 
-// ── Operations ────────────────────────────────────────────────────────────────
+// -- Operations --
 
 let _operations = [];
 let _operationEndpoints = [];
 
 async function loadOperations() {
-  const [ops, eps] = await Promise.all([
-    api('/api/operations'),
-    api('/api/endpoints'),
-  ]);
-  _operations = ops;
-  _operationEndpoints = eps;
+  const ops = await api('/api/operations');
+  _operations = Array.isArray(ops) ? ops : [];
+  if (!_operationEndpoints || !_operationEndpoints.length) {
+    const eps = await api('/api/endpoints');
+    _operationEndpoints = Array.isArray(eps) ? eps : [];
+  }
   renderOperations();
 }
 
@@ -2183,8 +2185,8 @@ function renderOperations() {
       <td><span class="badge" style="background:#1e293b;color:#94a3b8">${op.endpoint_name}</span></td>
       <td><span class="badge" style="background:#0f2a1a;color:#4ade80">${op.method}</span></td>
       <td class="mono" style="font-size:11px;color:#94a3b8">${op.path}</td>
-      <td style="font-size:11px;color:#64748b">${op.default_params && Object.keys(op.default_params).length ? JSON.stringify(op.default_params) : '—'}</td>
-      <td>${(op.tags || []).map(t => '<span class="badge">'+t+'</span>').join(' ') || '—'}</td>
+      <td style="font-size:11px;color:#64748b">${op.default_params && Object.keys(op.default_params).length ? JSON.stringify(op.default_params) : '---'}</td>
+      <td>${(op.tags || []).map(t => '<span class="badge">'+t+'</span>').join(' ') || '---'}</td>
       <td><span class="status-dot ${op.is_active ? 'green' : 'red'}"></span>${op.is_active ? 'Active' : 'Inactive'}</td>
       <td>
         <button class="btn btn-ghost btn-sm" onclick="editOperation(${op.id})">Edit</button>
@@ -2206,10 +2208,9 @@ function openOperationModal(op) {
   document.getElementById('op-tags').value = op ? (op.tags || []).join(', ') : '';
   document.getElementById('operation-modal-title').textContent = op ? 'Edit Operation' : 'Add Operation';
 
-  // Populate endpoint dropdown
   const sel = document.getElementById('op-endpoint');
   sel.innerHTML = _operationEndpoints.map(e =>
-    `<option value="${e.name}" ${op && op.endpoint_name === e.name ? 'selected' : ''}>${e.name}</option>`
+    '<option value="' + e.name + '"' + (op && op.endpoint_name === e.name ? ' selected' : '') + '>' + e.name + '</option>'
   ).join('');
 
   document.getElementById('operation-modal').style.display = 'flex';
@@ -2251,7 +2252,7 @@ async function saveOperation() {
 
   try {
     if (id) {
-      await api(`/api/operations/${id}`, 'PUT', payload);
+      await api('/api/operations/' + id, 'PUT', payload);
       toast('Operation updated');
     } else {
       await api('/api/operations', 'POST', payload);
@@ -2263,8 +2264,8 @@ async function saveOperation() {
 }
 
 async function deleteOperation(id, name) {
-  if (!confirm(`Delete operation "${name}"?`)) return;
-  await api(`/api/operations/${id}`, 'DELETE');
+  if (!confirm('Delete operation "' + name + '"?')) return;
+  await api('/api/operations/' + id, 'DELETE');
   toast('Operation deleted');
   loadOperations();
 }
