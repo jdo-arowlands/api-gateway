@@ -119,9 +119,8 @@ app.add_middleware(
     https_only=False,   # Railway terminates TLS at the edge; cookie still travels over HTTPS
 )
 
-
 app.include_router(webhook_router)
-
+app.include_router(denticon_proxy_router)
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # ENDPOINTS — grouped by resource
