@@ -575,7 +575,9 @@
       <button class="nav-item" onclick="showPage('projects')">
         📁 Projects <span class="badge" id="badge-projects">—</span>
       </button>
-      <button class="nav-item" onclick="showPage('operations')"><span class="nav-icon">⚡</span>Operations</button>
+      <button class="nav-item" onclick="showPage('operations')">
+        ⚡ Operations
+      </button>
       <button class="nav-item" onclick="showPage('endpoints')">
         🔌 Endpoints <span class="badge" id="badge-endpoints">—</span>
       </button>
@@ -716,13 +718,13 @@
   <div class="topbar">
     <h2>API Operations</h2>
     <div class="topbar-actions">
-      <button class="btn btn-primary" onclick="openOperationModal()">+ Add Operation</button>
+      <button class="btn btn-primary" onclick="openOperationModal()">+ New Operation</button>
     </div>
   </div>
   <div class="content">
-    <p class="muted" style="margin-bottom:16px">
-      Named API operations — configurable paths and default params for each endpoint.
-      Used by proxy routes so no paths are hardcoded in Python.
+    <p style="color:var(--muted);margin-bottom:16px;font-size:13px">
+      Named API operations — configurable paths and default params per endpoint.
+      Reference by name in code via <code>caller.call_operation("name")</code> so no paths are hardcoded in Python.
     </p>
     <div class="table-wrap">
       <table class="data-table">
@@ -730,7 +732,7 @@
           <th>Name</th><th>Endpoint</th><th>Method</th><th>Path</th><th>Default Params</th><th>Tags</th><th>Status</th><th>Actions</th>
         </tr></thead>
         <tbody id="operations-body">
-          <tr><td colspan="8" class="muted" style="text-align:center;padding:40px">Loading...</td></tr>
+          <tr><td colspan="8" style="text-align:center;padding:40px;color:var(--muted)">Loading...</td></tr>
         </tbody>
       </table>
     </div>
@@ -738,64 +740,63 @@
 </div>
 
 <!-- OPERATION MODAL -->
-<div id="operation-modal" class="modal" style="display:none">
-  <div class="modal-backdrop" onclick="closeOperationModal()"></div>
-  <div class="modal-box" style="max-width:560px">
-    <div class="modal-header">
-      <h3 id="operation-modal-title">Add Operation</h3>
-      <button class="btn-close" onclick="closeOperationModal()">X</button>
+<div class="modal-overlay" id="operation-modal">
+  <div class="modal">
+    <div class="modal-head">
+      <h3 id="operation-modal-title">New Operation</h3>
+      <button class="modal-close" onclick="closeModal('operation-modal')">×</button>
     </div>
     <div class="modal-body">
       <input type="hidden" id="op-id">
-      <div class="form-row">
-        <label>Name (slug)</label>
-        <input id="op-name" placeholder="denticon-appointments" class="form-input">
-        <small class="muted">Unique identifier used in code e.g. denticon-appointments</small>
-      </div>
-      <div class="form-row">
-        <label>Label</label>
-        <input id="op-label" placeholder="Fetch Appointments" class="form-input">
-      </div>
-      <div class="form-row">
-        <label>Endpoint</label>
-        <select id="op-endpoint" class="form-input"></select>
-      </div>
-      <div class="form-row two-col">
-        <div>
+      <div class="form-grid">
+        <div class="form-group">
+          <label>Name (slug)</label>
+          <input id="op-name" placeholder="denticon-appointments">
+          <small style="color:var(--muted);font-size:11px">Used in code: caller.call_operation("denticon-appointments")</small>
+        </div>
+        <div class="form-group">
+          <label>Label</label>
+          <input id="op-label" placeholder="Fetch Appointments">
+        </div>
+        <div class="form-group">
+          <label>Endpoint</label>
+          <select id="op-endpoint"></select>
+        </div>
+        <div class="form-group">
           <label>Method</label>
-          <select id="op-method" class="form-input">
+          <select id="op-method">
             <option>GET</option><option>POST</option><option>PUT</option>
             <option>PATCH</option><option>DELETE</option>
           </select>
         </div>
-        <div>
-          <label>Active</label>
-          <select id="op-active" class="form-input">
+        <div class="form-group full">
+          <label>Path</label>
+          <input id="op-path" placeholder="/denticon/appointments/v0/" class="mono">
+          <small style="color:var(--muted);font-size:11px">Use {patient_id} for path params e.g. /denticon/patients/v0/{patient_id}</small>
+        </div>
+        <div class="form-group full">
+          <label>Default Params (JSON)</label>
+          <textarea id="op-params" rows="3" placeholder='{"PageSize": 500, "PageNumber": 1}'>{}</textarea>
+        </div>
+        <div class="form-group full">
+          <label>Description</label>
+          <textarea id="op-desc" rows="2" placeholder="What this operation does"></textarea>
+        </div>
+        <div class="form-group">
+          <label>Tags (comma separated)</label>
+          <input id="op-tags" placeholder="denticon, scheduling">
+        </div>
+        <div class="form-group">
+          <label>Status</label>
+          <select id="op-active">
             <option value="true">Active</option>
             <option value="false">Inactive</option>
           </select>
         </div>
       </div>
-      <div class="form-row">
-        <label>Path</label>
-        <input id="op-path" placeholder="/denticon/appointments/v0/" class="form-input mono">
-        <small class="muted">Use {patient_id} for path params e.g. /denticon/patients/v0/{patient_id}</small>
-      </div>
-      <div class="form-row">
-        <label>Default Params (JSON)</label>
-        <textarea id="op-params" class="form-input mono" rows="3" placeholder='{"PageSize": 500, "PageNumber": 1}'></textarea>
-      </div>
-      <div class="form-row">
-        <label>Description</label>
-        <textarea id="op-desc" class="form-input" rows="2" placeholder="What this operation does"></textarea>
-      </div>
-      <div class="form-row">
-        <label>Tags (comma separated)</label>
-        <input id="op-tags" placeholder="denticon, scheduling" class="form-input">
-      </div>
     </div>
     <div class="modal-footer">
-      <button class="btn btn-ghost" onclick="closeOperationModal()">Cancel</button>
+      <button class="btn btn-ghost" onclick="closeModal('operation-modal')">Cancel</button>
       <button class="btn btn-primary" onclick="saveOperation()">Save Operation</button>
     </div>
   </div>
@@ -2176,21 +2177,24 @@ function renderOperations() {
   const tbody = document.getElementById('operations-body');
   if (!tbody) return;
   if (!_operations.length) {
-    tbody.innerHTML = '<tr><td colspan="8" class="muted" style="text-align:center;padding:40px">No operations configured yet. Add one to get started.</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="8" style="text-align:center;padding:40px;color:var(--muted)">No operations configured yet.</td></tr>';
     return;
   }
   tbody.innerHTML = _operations.map(op => `
     <tr>
-      <td><span class="mono" style="font-size:12px">${op.name}</span>${op.label ? '<br><small class="muted">'+op.label+'</small>' : ''}</td>
-      <td><span class="badge" style="background:#1e293b;color:#94a3b8">${op.endpoint_name}</span></td>
-      <td><span class="badge" style="background:#0f2a1a;color:#4ade80">${op.method}</span></td>
-      <td class="mono" style="font-size:11px;color:#94a3b8">${op.path}</td>
-      <td style="font-size:11px;color:#64748b">${op.default_params && Object.keys(op.default_params).length ? JSON.stringify(op.default_params) : '---'}</td>
-      <td>${(op.tags || []).map(t => '<span class="badge">'+t+'</span>').join(' ') || '---'}</td>
-      <td><span class="status-dot ${op.is_active ? 'green' : 'red'}"></span>${op.is_active ? 'Active' : 'Inactive'}</td>
+      <td>
+        <span style="font-family:monospace;font-size:12px">${op.name}</span>
+        ${op.label ? '<br><small style="color:var(--muted)">'+op.label+'</small>' : ''}
+      </td>
+      <td><span class="badge">${op.endpoint_name}</span></td>
+      <td><span class="badge" style="color:#4ade80">${op.method}</span></td>
+      <td style="font-family:monospace;font-size:11px;color:var(--muted)">${op.path}</td>
+      <td style="font-size:11px;color:var(--muted)">${op.default_params && Object.keys(op.default_params).length ? JSON.stringify(op.default_params) : '—'}</td>
+      <td>${(op.tags||[]).map(t=>'<span class="badge">'+t+'</span>').join(' ')||'—'}</td>
+      <td><span class="status-dot ${op.is_active?'green':'red'}"></span>${op.is_active?'Active':'Inactive'}</td>
       <td>
         <button class="btn btn-ghost btn-sm" onclick="editOperation(${op.id})">Edit</button>
-        <button class="btn btn-ghost btn-sm" style="color:#f87171" onclick="deleteOperation(${op.id}, '${op.name}')">Delete</button>
+        <button class="btn btn-ghost btn-sm" style="color:var(--red)" onclick="deleteOperation(${op.id},'${op.name}')">Delete</button>
       </td>
     </tr>
   `).join('');
@@ -2199,21 +2203,21 @@ function renderOperations() {
 function openOperationModal(op) {
   document.getElementById('op-id').value = op ? op.id : '';
   document.getElementById('op-name').value = op ? op.name : '';
-  document.getElementById('op-label').value = op ? (op.label || '') : '';
+  document.getElementById('op-label').value = op ? (op.label||'') : '';
   document.getElementById('op-path').value = op ? op.path : '';
   document.getElementById('op-method').value = op ? op.method : 'GET';
   document.getElementById('op-active').value = op ? String(op.is_active) : 'true';
-  document.getElementById('op-params').value = op ? JSON.stringify(op.default_params || {}, null, 2) : '{}';
-  document.getElementById('op-desc').value = op ? (op.description || '') : '';
-  document.getElementById('op-tags').value = op ? (op.tags || []).join(', ') : '';
-  document.getElementById('operation-modal-title').textContent = op ? 'Edit Operation' : 'Add Operation';
+  document.getElementById('op-params').value = op ? JSON.stringify(op.default_params||{},null,2) : '{}';
+  document.getElementById('op-desc').value = op ? (op.description||'') : '';
+  document.getElementById('op-tags').value = op ? (op.tags||[]).join(', ') : '';
+  document.getElementById('operation-modal-title').textContent = op ? 'Edit Operation' : 'New Operation';
 
   const sel = document.getElementById('op-endpoint');
   sel.innerHTML = _operationEndpoints.map(e =>
-    '<option value="' + e.name + '"' + (op && op.endpoint_name === e.name ? ' selected' : '') + '>' + e.name + '</option>'
+    '<option value="'+e.name+'"'+(op&&op.endpoint_name===e.name?' selected':'')+'>'+e.name+'</option>'
   ).join('');
 
-  document.getElementById('operation-modal').style.display = 'flex';
+  document.getElementById('operation-modal').classList.add('open');
 }
 
 function editOperation(id) {
@@ -2221,19 +2225,13 @@ function editOperation(id) {
   if (op) openOperationModal(op);
 }
 
-function closeOperationModal() {
-  document.getElementById('operation-modal').style.display = 'none';
-}
-
 async function saveOperation() {
   const id = document.getElementById('op-id').value;
   let defaultParams = {};
-  try { defaultParams = JSON.parse(document.getElementById('op-params').value || '{}'); }
-  catch { toast('Default Params must be valid JSON', 'error'); return; }
+  try { defaultParams = JSON.parse(document.getElementById('op-params').value||'{}'); }
+  catch { toast('Default Params must be valid JSON','error'); return; }
 
-  const tags = document.getElementById('op-tags').value
-    .split(',').map(t => t.trim()).filter(Boolean);
-
+  const tags = document.getElementById('op-tags').value.split(',').map(t=>t.trim()).filter(Boolean);
   const payload = {
     name: document.getElementById('op-name').value.trim(),
     label: document.getElementById('op-label').value.trim(),
@@ -2246,26 +2244,24 @@ async function saveOperation() {
     is_active: document.getElementById('op-active').value === 'true',
   };
 
-  if (!payload.name || !payload.path) {
-    toast('Name and Path are required', 'error'); return;
-  }
+  if (!payload.name || !payload.path) { toast('Name and Path are required','error'); return; }
 
   try {
     if (id) {
-      await api('/api/operations/' + id, 'PUT', payload);
+      await api('/api/operations/'+id,'PUT',payload);
       toast('Operation updated');
     } else {
-      await api('/api/operations', 'POST', payload);
+      await api('/api/operations','POST',payload);
       toast('Operation created');
     }
-    closeOperationModal();
+    closeModal('operation-modal');
     loadOperations();
-  } catch(e) { toast(e.message, 'error'); }
+  } catch(e) { toast(e.message,'error'); }
 }
 
 async function deleteOperation(id, name) {
-  if (!confirm('Delete operation "' + name + '"?')) return;
-  await api('/api/operations/' + id, 'DELETE');
+  if (!confirm('Delete operation "'+name+'"?')) return;
+  await api('/api/operations/'+id,'DELETE');
   toast('Operation deleted');
   loadOperations();
 }
