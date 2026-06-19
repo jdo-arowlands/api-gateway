@@ -575,8 +575,6 @@
       <button class="nav-item" onclick="showPage('projects')">
         📁 Projects <span class="badge" id="badge-projects">—</span>
       </button>
-      <button class="nav-item" onclick="showPage('operations')">
-           <span class="nav-icon">⚡</span>Operations</button>
       <button class="nav-item" onclick="showPage('endpoints')">
         🔌 Endpoints <span class="badge" id="badge-endpoints">—</span>
       </button>
@@ -1290,7 +1288,7 @@ function showPage(id) {
 
 // ── API helpers ───────────────────────────────────────────────────────────────
 async function api(path, method='GET', body=null) {
-  const opts = { method, headers: {'Content-Type': 'application/json'} };
+  const opts = { method, headers: {'Content-Type': 'application/json'}, credentials: 'include' };
   if (body) opts.body = JSON.stringify(body);
   const r = await fetch(API + path, opts);
   if (r.status === 401) {
