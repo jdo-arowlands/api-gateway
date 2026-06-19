@@ -2,19 +2,23 @@
 denticon_proxy.py  — api-gateway-railway
 
 Proxy routes called by ins-verify-api.
-Handles ALL Denticon field mapping, normalization, and data enrichment here
-so ins-verify-api has zero knowledge of Denticon's API shape.
+All API paths and default params are configured in the portal as APIOperations
+— zero hardcoded Denticon paths in this file.
 
-Returns clean, normalized PatientRecord objects ready for the verification queue.
+Operations configured in portal (create these via /api/operations):
+  denticon-appointments   GET  /denticon/appointments/v0/      {"PageSize":500,"PageNumber":1}
+  denticon-patient        GET  /denticon/patients/v0/{id}      {}
+  denticon-insurance      GET  /denticon/patients/v0/{id}/insurances  {}
+  denticon-providers      GET  /denticon/practices/v0/providers  {"PageSize":1000}
 
-Endpoint controlled by DENTICON_ENDPOINT env var:
+DENTICON_ENDPOINT env var controls which APIEndpoint to use:
   DENTICON_ENDPOINT=denticon          (staging)
   DENTICON_ENDPOINT=denticon-prod     (production)
 """
 
 from fastapi import APIRouter, Request, HTTPException, Query
 from fastapi.responses import JSONResponse
-from database import SessionLocal
+from database import SessionLocal, APIOperation
 from api_caller import APICaller
 from datetime import datetime, timedelta, timezone
 try:
@@ -24,33 +28,12 @@ except ImportError:
 import os
 
 router = APIRouter(prefix="/proxy/denticon", tags=["denticon-proxy"])
-# ── Timezone helper ───────────────────────────────────────────────────────────
-
-def _now_local() -> datetime:
-    """Returns current time in configured local timezone."""
-    tz_name = os.environ.get("TZ", "America/Chicago")
-    try:
-        tz = ZoneInfo(tz_name)
-        return datetime.now(tz)
-    except Exception:
-        return datetime.now(timezone.utc)
-
-
-def _format_local(dt: datetime) -> str:
-    """Formats a datetime in local timezone as a readable string."""
-    tz_name = os.environ.get("TZ", "America/Chicago")
-    try:
-        tz = ZoneInfo(tz_name)
-        local_dt = dt.astimezone(tz)
-        return local_dt.strftime("%Y-%m-%d %I:%M:%S %p %Z")
-    except Exception:
-        return dt.isoformat()
-
-
 
 GATEWAY_API_KEY = os.environ.get("GATEWAY_API_KEY", "")
 DENTICON_ENDPOINT = os.environ.get("DENTICON_ENDPOINT", "denticon")
 
+
+# ── Auth ──────────────────────────────────────────────────────────────────────
 
 def _verify_internal(request: Request):
     key = request.headers.get("X-Gateway-API-Key", "")
@@ -58,43 +41,52 @@ def _verify_internal(request: Request):
         raise HTTPException(status_code=401, detail="Invalid internal API key")
 
 
-async def _call(method: str, path: str, params: dict = None, body: dict = None) -> dict:
+# ── Timezone helper ───────────────────────────────────────────────────────────
+
+def _now_local() -> datetime:
+    tz_name = os.environ.get("TZ", "America/Chicago")
+    try:
+        return datetime.now(ZoneInfo(tz_name))
+    except Exception:
+        return datetime.now(timezone.utc)
+
+
+def _format_local(dt: datetime) -> str:
+    tz_name = os.environ.get("TZ", "America/Chicago")
+    try:
+        local_dt = dt.astimezone(ZoneInfo(tz_name))
+        return local_dt.strftime("%Y-%m-%d %I:%M:%S %p %Z")
+    except Exception:
+        return dt.isoformat()
+
+
+# ── Operation caller ──────────────────────────────────────────────────────────
+
+async def _op(operation_name: str, params: dict = None, body: dict = None) -> dict:
+    """
+    Calls a named portal operation via APICaller.call_operation().
+    Falls back to a direct path call if the operation isn't configured yet.
+    """
     db = SessionLocal()
     try:
         caller = APICaller(db)
-        return await caller.call(
-            DENTICON_ENDPOINT, method, path,
-            params=params, body=body,
+        return await caller.call_operation(
+            operation_name,
+            params=params,
+            body=body,
             triggered_by="ins-verify-proxy",
         )
     finally:
         db.close()
 
 
-# ── Field mapping helpers ─────────────────────────────────────────────────────
+# ── Field mapping ─────────────────────────────────────────────────────────────
 
 def _map_appointment(appt: dict, office_id: str) -> dict | None:
-    """
-    Maps a raw Denticon appointment to our standard PatientRecord shape.
-    Returns None for block appointments, training days, or records without
-    a real patient.
-
-    Real Denticon field names (confirmed from staging):
-      appointmentId, patientId, firstName, lastName,
-      cellPhone, homePhone, workPhone, email,
-      appointmentDate, appointmentLength, appointmentStatus,
-      providerId, operatoryId, procedureCodes[].procedureCode,
-      isNewPatient, isBlock, isCancelled, isMissed
-    """
-    # Filter out blocks, training days, cancelled, missed
-    if appt.get("isBlock"):
-        return None
-    if appt.get("isCancelled"):
-        return None
-    if appt.get("isMissed"):
+    """Maps raw Denticon appointment to PatientRecord shape. Returns None for non-patient records."""
+    if appt.get("isBlock") or appt.get("isCancelled") or appt.get("isMissed"):
         return None
 
-    # Filter appointments with no real patient name
     first = appt.get("firstName", "").strip()
     last = appt.get("lastName", "").strip()
     if not first or not last:
@@ -104,29 +96,21 @@ def _map_appointment(appt: dict, office_id: str) -> dict | None:
 
     patient_id = appt.get("patientId")
     appt_id = appt.get("appointmentId")
-    provider_id = str(appt.get("providerId", ""))
 
-    # Extract CDT procedure codes
     procedures = [
         p.get("procedureCode", "")
         for p in (appt.get("procedureCodes") or [])
         if p.get("procedureCode")
     ]
 
-    # Phone — prefer cell, fall back to home, then work
-    phone = (
-        appt.get("cellPhone") or
-        appt.get("homePhone") or
-        appt.get("workPhone") or
-        ""
-    )
+    phone = appt.get("cellPhone") or appt.get("homePhone") or appt.get("workPhone") or ""
 
     return {
         "patientId": f"PT-JD-{office_id}-{patient_id or appt_id}",
         "denticonPatientId": str(patient_id) if patient_id else None,
         "firstName": first,
         "lastName": last,
-        "dob": None,          # Not on appointment — fetched separately if needed
+        "dob": None,
         "phone": phone,
         "email": appt.get("email"),
         "officeId": f"JD-{office_id}",
@@ -135,39 +119,25 @@ def _map_appointment(appt: dict, office_id: str) -> dict | None:
             "apptId": f"APT-JD-{office_id}-{appt_id}",
             "denticonApptId": appt_id,
             "date": appt.get("appointmentDate", ""),
-            "provider": None,         # Resolved from provider cache
-            "providerDenticonId": provider_id,
-            "providerNpi": None,      # Resolved from provider cache
+            "provider": None,
+            "providerDenticonId": str(appt.get("providerId", "")),
+            "providerNpi": None,
             "duration": appt.get("appointmentLength"),
             "status": appt.get("appointmentStatus", "Scheduled"),
             "procedures": procedures,
             "isNewPatient": appt.get("isNewPatient", False),
             "notes": None,
         },
-        "insurance": {
-            "primary": None,    # Fetched separately via /insurance/{patientId}
-            "secondary": None,
-        },
+        "insurance": {"primary": None, "secondary": None},
         "verificationStatus": "PENDING",
         "pulledAt": _format_local(_now_local()),
     }
 
 
 def _map_provider(prov: dict) -> dict:
-    """
-    Maps a raw Denticon provider to our standard shape.
-    Real Denticon field names (confirmed from staging):
-      providerId, providerShortId, firstName, lastName, title,
-      providerType, active, isBookableOnline,
-      nationalProviderId (= NPI Type 1),
-      licenseNumber, officeId
-    """
     full_name = " ".join(x for x in [
-        prov.get("title", ""),
-        prov.get("firstName", ""),
-        prov.get("lastName", ""),
+        prov.get("title", ""), prov.get("firstName", ""), prov.get("lastName", "")
     ] if x).strip()
-
     return {
         "providerId": prov.get("providerId"),
         "providerShortId": prov.get("providerShortId"),
@@ -176,7 +146,7 @@ def _map_provider(prov: dict) -> dict:
         "lastName": prov.get("lastName"),
         "title": prov.get("title"),
         "providerType": prov.get("providerType"),
-        "npi": prov.get("nationalProviderId"),      # Type 1 individual NPI
+        "npi": prov.get("nationalProviderId"),
         "licenseNumber": prov.get("licenseNumber"),
         "active": prov.get("active", True),
         "isBookableOnline": prov.get("isBookableOnline", False),
@@ -185,57 +155,21 @@ def _map_provider(prov: dict) -> dict:
 
 
 def _map_insurance(ins: dict) -> dict:
-    """
-    Maps a raw Denticon insurance record to our standard shape.
-    Field names TBD — will update once we confirm from staging response.
-    """
     return {
         "carrierId": str(ins.get("insuranceCarrierId", ins.get("carrierId", ""))),
-        "carrierName": (
-            ins.get("carrierName") or
-            ins.get("insuranceCarrierName") or
-            ins.get("planName") or ""
-        ),
-        "subscriberFirstName": (
-            ins.get("subscriberFirstName") or
-            ins.get("insuredFirstName")
-        ),
-        "subscriberLastName": (
-            ins.get("subscriberLastName") or
-            ins.get("insuredLastName")
-        ),
-        "subscriberDob": (
-            (ins.get("subscriberBirthDate") or
-             ins.get("insuredBirthDate") or "")[:10] or None
-        ),
-        "memberId": (
-            ins.get("memberId") or
-            ins.get("subscriberId") or
-            ins.get("insuredId")
-        ),
-        "groupNo": (
-            ins.get("groupNumber") or
-            ins.get("groupNo")
-        ),
-        "relationship": (
-            ins.get("relationship") or
-            ins.get("patientRelationship") or
-            "Self"
-        ),
-        "planType": (
-            ins.get("planType") or
-            ins.get("insuranceType") or
-            "PPO"
-        ),
+        "carrierName": ins.get("carrierName") or ins.get("insuranceCarrierName") or ins.get("planName") or "",
+        "subscriberFirstName": ins.get("subscriberFirstName") or ins.get("insuredFirstName"),
+        "subscriberLastName": ins.get("subscriberLastName") or ins.get("insuredLastName"),
+        "subscriberDob": ((ins.get("subscriberBirthDate") or ins.get("insuredBirthDate") or "")[:10]) or None,
+        "memberId": ins.get("memberId") or ins.get("subscriberId") or ins.get("insuredId"),
+        "groupNo": ins.get("groupNumber") or ins.get("groupNo"),
+        "relationship": ins.get("relationship") or ins.get("patientRelationship") or "Self",
+        "planType": ins.get("planType") or ins.get("insuranceType") or "PPO",
         "sequence": ins.get("insuranceSequence", ins.get("sequence", 1)),
     }
 
 
-def _enrich_with_providers(records: list[dict], providers: list[dict]) -> list[dict]:
-    """
-    Adds provider name and NPI to each appointment record using
-    the provider list pulled for this office.
-    """
+def _enrich_with_providers(records: list, providers: list) -> list:
     provider_map = {str(p["providerId"]): p for p in providers}
     for rec in records:
         prov_id = rec["appointment"].get("providerDenticonId")
@@ -246,30 +180,17 @@ def _enrich_with_providers(records: list[dict], providers: list[dict]) -> list[d
     return records
 
 
-# ── Proxy endpoints ─────────────────────────────────────────────────────────
-@router.get("/debug/appointments/{office_id}")
-async def debug_appointments(request: Request, office_id: str):
-    """Temporary debug endpoint — shows raw gateway response structure."""
-    _verify_internal(request)
-    result = await _call(
-        "GET",
-        "/denticon/appointments/v0/",
-        params={"OfficeId": office_id, "PageSize": 10, "PageNumber": 1},
-    )
-    # Show the structure without all the data
-    data = result.get("data") or {}
-    return JSONResponse(content={
-        "success": result.get("success"),
-        "status_code": result.get("status_code"),
-        "error": result.get("error"),
-        "top_level_keys": list(result.keys()),
-        "data_keys": list(data.keys()) if isinstance(data, dict) else f"data is {type(data).__name__}",
-        "data_data_type": type((data.get("data") if isinstance(data, dict) else None)).__name__,
-        "data_data_length": len(data.get("data") or []) if isinstance(data, dict) else 0,
-        "first_record_keys": list((data.get("data") or [{}])[0].keys()) if isinstance(data, dict) and data.get("data") else [],
-    })
+def _extract_list(result: dict) -> list:
+    """Safely extract the data array from an APICaller result."""
+    outer = result.get("data") or {}
+    if isinstance(outer, dict) and "data" in outer:
+        return outer.get("data") or []
+    if isinstance(outer, list):
+        return outer
+    return []
 
-──
+
+# ── Proxy endpoints ───────────────────────────────────────────────────────────
 
 @router.get("/appointments/upcoming")
 async def proxy_appointments(
@@ -278,86 +199,55 @@ async def proxy_appointments(
     window_days: int = Query(3),
 ):
     """
-    Fetches scheduled appointments within the verification window,
-    normalizes to PatientRecord shape, and enriches with provider NPI.
-    Filters out blocks, training days, cancelled and missed appointments.
+    Fetch and normalize upcoming appointments for an office.
+    Uses portal operation: denticon-appointments
     """
     _verify_internal(request)
 
     now = datetime.now(timezone.utc)
     end = now + timedelta(days=window_days)
 
-    # Fetch appointments
-    appt_result = await _call(
-        "GET",
-        "/denticon/appointments/v0/",
+    result = await _op(
+        "denticon-appointments",
         params={
             "OfficeId": office_id,
             "StartDate": now.strftime("%Y-%m-%d"),
             "EndDate": end.strftime("%Y-%m-%d"),
-            "PageSize": 500,
-            "PageNumber": 1,
         },
     )
 
-    if not appt_result.get("success"):
-        return JSONResponse(content={
-            "success": False,
-            "error": appt_result.get("error"),
-            "patients": [],
-            "total": 0,
-        })
+    if not result.get("success"):
+        return JSONResponse(content={"success": False, "error": result.get("error"), "patients": [], "total": 0})
 
-    # APICaller wraps response as result["data"] = Denticon response body
-    # Denticon response body has appointments in body["data"]
-    # Handle both shapes defensively
-    _outer = appt_result.get("data") or {}
-    if isinstance(_outer, dict) and "data" in _outer:
-        raw_appointments = _outer.get("data") or []
-    elif isinstance(_outer, list):
-        raw_appointments = _outer
-    else:
-        raw_appointments = []
+    raw = _extract_list(result)
 
-    # Filter appointments to only the window
-    # Denticon ignores StartDate/EndDate params so we filter in Python.
-    # Strip timezone for naive comparison to avoid offset issues.
-    # Use 1-day lookback buffer to catch timezone edge cases.
+    # Filter to window — Denticon ignores date params so we filter in Python
     window_start = now.replace(tzinfo=None) - timedelta(days=1)
     window_end = end.replace(tzinfo=None)
     filtered = []
-    for appt in raw_appointments:
-        appt_date_str = appt.get("appointmentDate", "")
+    for appt in raw:
         try:
             appt_date = datetime.fromisoformat(
-                appt_date_str.replace("Z", "").replace("+00:00", "")
+                appt.get("appointmentDate", "").replace("Z", "").replace("+00:00", "")
             )
             if window_start <= appt_date <= window_end:
                 filtered.append(appt)
         except Exception:
             continue
 
-    # Map to normalized shape, drop None (blocks etc.)
     records = [r for r in [_map_appointment(a, office_id) for a in filtered] if r]
 
     if not records:
         return JSONResponse(content={
-            "success": True,
-            "patients": [],
-            "total": 0,
+            "success": True, "patients": [], "total": 0,
             "pulledAt": _format_local(_now_local()),
         })
 
-    # Fetch providers to enrich with names + NPIs
-    prov_result = await _call(
-        "GET",
-        "/denticon/practices/v0/providers",
-        params={"OfficeId": office_id},
-    )
+    # Enrich with provider NPIs
+    prov_result = await _op("denticon-providers", params={"OfficeId": office_id})
     providers = []
     if prov_result.get("success"):
-        raw_providers = (prov_result.get("data") or {}).get("data") or []
-        providers = [_map_provider(p) for p in raw_providers]
+        providers = [_map_provider(p) for p in _extract_list(prov_result)]
 
     records = _enrich_with_providers(records, providers)
 
@@ -373,61 +263,78 @@ async def proxy_appointments(
 
 @router.get("/patients/{patient_id}")
 async def proxy_patient(request: Request, patient_id: str):
-    """Fetch patient demographics."""
+    """
+    Fetch patient demographics.
+    Uses portal operation: denticon-patient
+    Operation path should be: /denticon/patients/v0/{patient_id}
+    Pass patient_id as runtime param to substitute in path.
+    """
     _verify_internal(request)
-    result = await _call("GET", f"/denticon/patients/v0/{patient_id}")
+    # For path-param operations, pass the ID as a param so the operation
+    # path template can include it, or we append to the base path
+    db = SessionLocal()
+    try:
+        caller = APICaller(db)
+        op = db.query(APIOperation).filter(
+            APIOperation.name == "denticon-patient",
+            APIOperation.is_active == True,
+        ).first()
+        if op:
+            path = op.path.replace("{patient_id}", patient_id).replace("{id}", patient_id)
+            result = await caller.call(op.endpoint_name, op.method, path, triggered_by="ins-verify-proxy")
+        else:
+            result = {"success": False, "error": "Operation 'denticon-patient' not configured"}
+    finally:
+        db.close()
     return JSONResponse(content=result)
 
 
 @router.get("/insurance/{patient_id}")
 async def proxy_insurance(request: Request, patient_id: str):
     """
-    Fetch and normalize patient insurance plans.
-    Returns primary and secondary in our standard shape.
+    Fetch and normalize patient insurance.
+    Uses portal operation: denticon-insurance
     """
     _verify_internal(request)
-    result = await _call("GET", f"/denticon/patients/v0/{patient_id}/insurances")
+    db = SessionLocal()
+    try:
+        caller = APICaller(db)
+        op = db.query(APIOperation).filter(
+            APIOperation.name == "denticon-insurance",
+            APIOperation.is_active == True,
+        ).first()
+        if op:
+            path = op.path.replace("{patient_id}", patient_id).replace("{id}", patient_id)
+            result = await caller.call(op.endpoint_name, op.method, path, triggered_by="ins-verify-proxy")
+        else:
+            result = {"success": False, "error": "Operation 'denticon-insurance' not configured"}
+    finally:
+        db.close()
 
     if not result.get("success"):
         return JSONResponse(content=result)
 
-    raw = (result.get("data") or {}).get("data") or []
+    raw = _extract_list(result)
     if isinstance(raw, dict):
         raw = [raw]
-
     plans = [_map_insurance(i) for i in raw]
     primary = next((p for p in plans if p.get("sequence") == 1), None)
     secondary = next((p for p in plans if p.get("sequence") == 2), None)
 
-    return JSONResponse(content={
-        "success": True,
-        "primary": primary,
-        "secondary": secondary,
-        "all": plans,
-    })
+    return JSONResponse(content={"success": True, "primary": primary, "secondary": secondary, "all": plans})
 
 
 @router.get("/providers/{office_id}")
 async def proxy_providers(request: Request, office_id: str):
     """
-    Fetch and normalize all providers for an office.
-    Includes NPI (nationalProviderId) for EDI use.
+    Fetch and normalize providers for an office.
+    Uses portal operation: denticon-providers
     """
     _verify_internal(request)
-    result = await _call(
-        "GET",
-        "/denticon/practices/v0/providers",
-        params={"OfficeId": office_id},
-    )
+    result = await _op("denticon-providers", params={"OfficeId": office_id})
 
     if not result.get("success"):
         return JSONResponse(content=result)
 
-    raw = (result.get("data") or {}).get("data") or []
-    providers = [_map_provider(p) for p in raw]
-
-    return JSONResponse(content={
-        "success": True,
-        "providers": providers,
-        "total": len(providers),
-    })
+    providers = [_map_provider(p) for p in _extract_list(result)]
+    return JSONResponse(content={"success": True, "providers": providers, "total": len(providers)})
