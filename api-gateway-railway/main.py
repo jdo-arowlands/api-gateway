@@ -15,7 +15,6 @@ from typing import Any, Optional
 from datetime import datetime
 from sqlalchemy.orm import Session
 from denticon_proxy import router as denticon_proxy_router
-app.include_router(denticon_proxy_router)
 
 from database import get_db, APIEndpoint, APICallLog, AppSetting, SessionLocal, Project, OfficePhoneMap
 import actions  # noqa — registers all @register_action decorators on startup
