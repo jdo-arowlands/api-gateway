@@ -338,3 +338,4 @@ async def proxy_providers(request: Request, office_id: str):
 
     providers = [_map_provider(p) for p in _extract_list(result)]
     return JSONResponse(content={"success": True, "providers": providers, "total": len(providers)})
+#clean 
