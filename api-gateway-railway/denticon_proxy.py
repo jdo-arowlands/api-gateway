@@ -33,7 +33,7 @@ GATEWAY_API_KEY = os.environ.get("GATEWAY_API_KEY", "")
 DENTICON_ENDPOINT = os.environ.get("DENTICON_ENDPOINT", "denticon")
 
 
-# ── Auth ──────────────────────────────────────────────────────────────────────
+# -- Auth --
 
 def _verify_internal(request: Request):
     key = request.headers.get("X-Gateway-API-Key", "")
@@ -41,7 +41,7 @@ def _verify_internal(request: Request):
         raise HTTPException(status_code=401, detail="Invalid internal API key")
 
 
-# ── Timezone helper ───────────────────────────────────────────────────────────
+# -- Timezone helper --
 
 def _now_local() -> datetime:
     tz_name = os.environ.get("TZ", "America/Chicago")
@@ -60,7 +60,7 @@ def _format_local(dt: datetime) -> str:
         return dt.isoformat()
 
 
-# ── Operation caller ──────────────────────────────────────────────────────────
+# -- Operation caller --
 
 async def _op(operation_name: str, params: dict = None, body: dict = None) -> dict:
     """
@@ -80,7 +80,80 @@ async def _op(operation_name: str, params: dict = None, body: dict = None) -> di
         db.close()
 
 
-# ── Field mapping ─────────────────────────────────────────────────────────────
+# -- Generic passthrough route --
+# Handles ANY operation configured in the portal with zero code changes.
+# For pure passthrough operations (no filtering/reshaping needed).
+#
+#   GET  /proxy/denticon/op/{operation_name}?OfficeId=102&PageSize=50
+#   POST /proxy/denticon/op/{operation_name}   (with JSON body)
+#
+# Query params are passed straight through to the operation (merged with the
+# operation's default_params). Path params like {patient_id} in the operation
+# path are substituted from query params of the same name.
+
+@router.api_route("/op/{operation_name}", methods=["GET", "POST"])
+async def generic_operation(operation_name: str, request: Request):
+    """
+    Generic passthrough — call any portal operation by name.
+    Add an operation in the portal and it works here immediately, no code.
+    """
+    _verify_internal(request)
+
+    # Collect query params as the runtime params
+    params = dict(request.query_params)
+
+    # Body for POST
+    body = None
+    if request.method == "POST":
+        try:
+            body = await request.json()
+        except Exception:
+            body = None
+
+    # Look up the operation to handle path-param substitution ({id}, {patient_id})
+    db = SessionLocal()
+    try:
+        caller = APICaller(db)
+        op = db.query(APIOperation).filter(
+            APIOperation.name == operation_name,
+            APIOperation.is_active == True,
+        ).first()
+
+        if not op:
+            return JSONResponse(
+                status_code=404,
+                content={"success": False, "error": f"Operation '{operation_name}' not found or inactive"},
+            )
+
+        # Substitute any {placeholder} in the path from matching query params,
+        # then remove those params so they aren't also sent as query string.
+        path = op.path
+        used_keys = []
+        for key, val in list(params.items()):
+            token = "{" + key + "}"
+            if token in path:
+                path = path.replace(token, str(val))
+                used_keys.append(key)
+        for k in used_keys:
+            params.pop(k, None)
+
+        # Merge default params (runtime params win)
+        merged = {**(op.default_params or {}), **params}
+
+        result = await caller.call(
+            op.endpoint_name,
+            op.method,
+            path,
+            params=merged or None,
+            body=body if body else (op.default_body or None),
+            triggered_by="ins-verify-proxy:generic",
+        )
+        return JSONResponse(content=result)
+    finally:
+        db.close()
+
+
+# -- Field mapping --
 
 def _map_appointment(appt: dict, office_id: str) -> dict | None:
     """Maps raw Denticon appointment to PatientRecord shape. Returns None for non-patient records."""
@@ -190,7 +263,7 @@ def _extract_list(result: dict) -> list:
     return []
 
 
-# ── Proxy endpoints ───────────────────────────────────────────────────────────
+# -- Proxy endpoints --
 
 @router.get("/appointments/upcoming")
 async def proxy_appointments(
@@ -338,4 +411,3 @@ async def proxy_providers(request: Request, office_id: str):
 
     providers = [_map_provider(p) for p in _extract_list(result)]
     return JSONResponse(content={"success": True, "providers": providers, "total": len(providers)})
-#clean 
