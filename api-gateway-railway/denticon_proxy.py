@@ -228,18 +228,111 @@ def _map_provider(prov: dict) -> dict:
 
 
 def _map_insurance(ins: dict) -> dict:
+    """
+    Maps a raw Denticon insurance plan to our standard shape.
+    Field names confirmed from Planet DDS Insurance Plans API docs.
+    insuranceType is "Primary" | "Secondary".
+    """
     return {
-        "carrierId": str(ins.get("insuranceCarrierId", ins.get("carrierId", ""))),
-        "carrierName": ins.get("carrierName") or ins.get("insuranceCarrierName") or ins.get("planName") or "",
-        "subscriberFirstName": ins.get("subscriberFirstName") or ins.get("insuredFirstName"),
-        "subscriberLastName": ins.get("subscriberLastName") or ins.get("insuredLastName"),
-        "subscriberDob": ((ins.get("subscriberBirthDate") or ins.get("insuredBirthDate") or "")[:10]) or None,
-        "memberId": ins.get("memberId") or ins.get("subscriberId") or ins.get("insuredId"),
-        "groupNo": ins.get("groupNumber") or ins.get("groupNo"),
-        "relationship": ins.get("relationship") or ins.get("patientRelationship") or "Self",
-        "planType": ins.get("planType") or ins.get("insuranceType") or "PPO",
-        "sequence": ins.get("insuranceSequence", ins.get("sequence", 1)),
+        "insuranceType": ins.get("insuranceType"),          # Primary | Secondary
+        "carrierId": ins.get("carrierId"),
+        "carrierName": ins.get("carrierName") or "",
+        "payerId": ins.get("payerId"),                       # ECLAIMS payer id — key for EDI
+        "carrierPhone": ins.get("carrierPhone"),
+        "carrierAddress": {
+            "line1": ins.get("carrierAddressLine1"),
+            "line2": ins.get("carrierAddressLine2"),
+            "city": ins.get("carrierCity"),
+            "state": ins.get("carrierState"),
+            "zip": ins.get("carrierZip"),
+        },
+        "subscriberId": ins.get("subscriberId"),
+        "groupNo": ins.get("groupNo"),
+        "subscriberFirstName": ins.get("subscriberFirstName"),
+        "subscriberLastName": ins.get("subscriberLastName"),
+        "subscriberDob": ((ins.get("subscriberBirthDate") or "")[:10]) or None,
+        "subscriberSex": ins.get("subscriberSex"),
+        "relationToSubscriber": ins.get("relationToSubscriber") or "Self",
+        "planType": ins.get("planType"),                     # Dental | Medical
+        "planCategory": ins.get("planCategory"),
+        "insurancePlanId": ins.get("insurancePlanId"),
+        "anniversaryDate": ins.get("anniversaryDate"),
+        # Benefit data — gold for verification
+        "benefits": {
+            "individualDeductible": ins.get("individualDeductible"),
+            "familyDeductible": ins.get("familyDeductible"),
+            "individualMaxBenefit": ins.get("individualMaxBenefit"),
+            "familyMaxBenefit": ins.get("familyMaxBenefit"),
+            "individualOrthoMaxBenefit": ins.get("individualOrthoMaxBenefit"),
+            "individualRemainingDeductible": ins.get("individualRemainingDeductible"),
+            "individualRemainingMax": ins.get("individualRemainingMax"),
+            "individualRemainingOrtho": ins.get("individualRemainingOrtho"),
+            "familyRemainingDeductible": ins.get("familyRemainingDeductible"),
+            "familyRemainingMax": ins.get("familyRemainingMax"),
+        },
     }
+
+
+def _split_insurance(plans: list) -> dict:
+    """Splits insurance plans into primary/secondary by insuranceType."""
+    mapped = [_map_insurance(p) for p in plans]
+    primary = next((p for p in mapped if (p.get("insuranceType") or "").lower() == "primary"), None)
+    secondary = next((p for p in mapped if (p.get("insuranceType") or "").lower() == "secondary"), None)
+    # Fallback: if types not labelled, first = primary, second = secondary
+    if not primary and mapped:
+        primary = mapped[0]
+    if not secondary and len(mapped) > 1:
+        secondary = mapped[1]
+    return {"primary": primary, "secondary": secondary, "all": mapped}
+
+
+# -- Per-patient enrichment helpers --
+
+async def _fetch_patient_dob(patient_id: str) -> str | None:
+    """Fetch a single patient's DOB via denticon-patient operation."""
+    db = SessionLocal()
+    try:
+        caller = APICaller(db)
+        op = db.query(APIOperation).filter(
+            APIOperation.name == "denticon-patient",
+            APIOperation.is_active == True,
+        ).first()
+        if not op:
+            return None
+        path = op.path.replace("{patient_id}", patient_id).replace("{id}", patient_id)
+        result = await caller.call(op.endpoint_name, op.method, path, triggered_by="ins-verify-proxy:enrich")
+        if not result.get("success"):
+            return None
+        outer = result.get("data") or {}
+        patient = outer.get("data") if isinstance(outer, dict) else None
+        if isinstance(patient, dict):
+            return (patient.get("birthDate") or "")[:10] or None
+    finally:
+        db.close()
+    return None
+
+
+async def _fetch_patient_insurance(patient_id: str) -> dict:
+    """Fetch a single patient's insurance via denticon-insurance operation."""
+    db = SessionLocal()
+    try:
+        caller = APICaller(db)
+        op = db.query(APIOperation).filter(
+            APIOperation.name == "denticon-insurance",
+            APIOperation.is_active == True,
+        ).first()
+        if not op:
+            return {"primary": None, "secondary": None, "all": []}
+        path = op.path.replace("{patient_id}", patient_id).replace("{id}", patient_id)
+        result = await caller.call(op.endpoint_name, op.method, path, triggered_by="ins-verify-proxy:enrich")
+        if not result.get("success"):
+            return {"primary": None, "secondary": None, "all": []}
+        plans = _extract_list(result)
+        if isinstance(plans, dict):
+            plans = [plans]
+        return _split_insurance(plans)
+    finally:
+        db.close()
 
 
 def _enrich_with_providers(records: list, providers: list) -> list:
@@ -270,10 +363,15 @@ async def proxy_appointments(
     request: Request,
     office_id: str = Query(...),
     window_days: int = Query(3),
+    enrich: bool = Query(False),
 ):
     """
     Fetch and normalize upcoming appointments for an office.
     Uses portal operation: denticon-appointments
+
+    enrich=false (default) — fast: names, appointment, provider NPI only
+    enrich=true            — full: also fetches DOB + insurance per patient
+                             (slower; use for background batch pulls)
     """
     _verify_internal(request)
 
@@ -324,10 +422,27 @@ async def proxy_appointments(
 
     records = _enrich_with_providers(records, providers)
 
+    # Optional deep enrichment — DOB + insurance per patient
+    if enrich:
+        import asyncio
+        for rec in records:
+            pid = rec.get("denticonPatientId")
+            if not pid:
+                continue
+            dob, ins = await asyncio.gather(
+                _fetch_patient_dob(pid),
+                _fetch_patient_insurance(pid),
+            )
+            if dob:
+                rec["dob"] = dob
+            rec["insurance"]["primary"] = ins.get("primary")
+            rec["insurance"]["secondary"] = ins.get("secondary")
+
     return JSONResponse(content={
         "success": True,
         "patients": records,
         "total": len(records),
+        "enriched": enrich,
         "pulledAt": _format_local(_now_local()),
         "officeId": office_id,
         "windowDays": window_days,
@@ -390,11 +505,9 @@ async def proxy_insurance(request: Request, patient_id: str):
     raw = _extract_list(result)
     if isinstance(raw, dict):
         raw = [raw]
-    plans = [_map_insurance(i) for i in raw]
-    primary = next((p for p in plans if p.get("sequence") == 1), None)
-    secondary = next((p for p in plans if p.get("sequence") == 2), None)
+    split = _split_insurance(raw)
 
-    return JSONResponse(content={"success": True, "primary": primary, "secondary": secondary, "all": plans})
+    return JSONResponse(content={"success": True, **split})
 
 
 @router.get("/providers/{office_id}")
@@ -411,3 +524,32 @@ async def proxy_providers(request: Request, office_id: str):
 
     providers = [_map_provider(p) for p in _extract_list(result)]
     return JSONResponse(content={"success": True, "providers": providers, "total": len(providers)})
+
+
+@router.get("/patient-detail/{office_id}/{patient_id}")
+async def proxy_patient_detail(request: Request, office_id: str, patient_id: str):
+    """
+    On-demand single-patient detail — DOB + insurance in one call.
+    Used by the UI when a verifier opens a specific patient (load-as-you-go).
+    Calls denticon-patient + denticon-insurance operations.
+    """
+    _verify_internal(request)
+
+    import asyncio
+    dob, ins = await asyncio.gather(
+        _fetch_patient_dob(patient_id),
+        _fetch_patient_insurance(patient_id),
+    )
+
+    return JSONResponse(content={
+        "success": True,
+        "denticonPatientId": patient_id,
+        "officeId": f"JD-{office_id}",
+        "dob": dob,
+        "insurance": {
+            "primary": ins.get("primary"),
+            "secondary": ins.get("secondary"),
+            "all": ins.get("all", []),
+        },
+        "pulledAt": _format_local(_now_local()),
+    })
