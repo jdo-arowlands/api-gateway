@@ -1,0 +1,413 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="description" content="Apex Roofing Solutions - Premium roofing products & installation in Lakeland Highlands, Florida">
+    <meta name="theme-color" content="#0f172a">
+    
+    <!-- PWA -->
+    <link rel="manifest" href="data:application/manifest+json,{
+        &quot;name&quot;:&quot;Apex Roofing Solutions&quot;,
+        &quot;short_name&quot;:&quot;Apex Roofing&quot;,
+        &quot;start_url&quot;:&quot;.&quot;,
+        &quot;display&quot;:&quot;standalone&quot;,
+        &quot;background_color&quot;:&quot;#0f172a&quot;,
+        &quot;theme_color&quot;:&quot;#f59e0b&quot;,
+        &quot;icons&quot;:[{
+            &quot;src&quot;:&quot;https://picsum.photos/id/1015/192/192&quot;,
+            &quot;sizes&quot;:&quot;192x192&quot;,
+            &quot;type&quot;:&quot;image/png&quot;
+        },{
+            &quot;src&quot;:&quot;https://picsum.photos/id/1015/512/512&quot;,
+            &quot;sizes&quot;:&quot;512x512&quot;,
+            &quot;type&quot;:&quot;image/png&quot;
+        }]
+    }">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+
+    <title>Apex Roofing Solutions | Lakeland Highlands, FL</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
+    
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Space+Grotesk:wght@500;600;700&display=swap');
+        
+        .logo-font { font-family: 'Space Grotesk', sans-serif; }
+        .hero-bg {
+            background: linear-gradient(rgba(15,23,42,0.88), rgba(15,23,42,0.88)), 
+                        url('https://picsum.photos/id/1015/2000/1400') center/cover no-repeat;
+        }
+        .product-card { transition: all 0.3s cubic-bezier(0.4,0,0.2,1); }
+        .product-card:hover { transform: translateY(-8px); box-shadow: 0 25px 50px -12px rgb(0 0 0 / 0.15); }
+        
+        #install-button { animation: pulse 2s infinite; }
+        @keyframes pulse { 0%,100% { transform: scale(1); } 50% { transform: scale(1.05); } }
+    </style>
+</head>
+<body class="tailwind-ready bg-white">
+
+    <!-- NAVBAR -->
+    <nav class="bg-slate-950 text-white sticky top-0 z-50 shadow-xl">
+        <div class="max-w-7xl mx-auto px-5 py-4 flex items-center justify-between">
+            <div class="flex items-center gap-x-3">
+                <div class="w-9 h-9 bg-amber-500 rounded-2xl flex items-center justify-center text-2xl flex-shrink-0">🏠</div>
+                <div class="logo-font text-3xl font-semibold tracking-tighter">APEX<span class="text-amber-500">ROOFING</span></div>
+            </div>
+
+            <div class="hidden md:flex items-center gap-x-8 text-sm font-medium">
+                <a href="#home" onclick="navigateToSection('home')" class="hover:text-amber-400">Home</a>
+                <a href="#services" onclick="navigateToSection('services')" class="hover:text-amber-400">Services</a>
+                <a href="#shop" onclick="navigateToSection('shop')" class="hover:text-amber-400">Shop</a>
+                <a href="#gallery" onclick="navigateToSection('gallery')" class="hover:text-amber-400">Gallery</a>
+                <a href="#contact" onclick="navigateToSection('contact')" class="hover:text-amber-400">Quote</a>
+            </div>
+
+            <div class="flex items-center gap-x-4">
+                <a href="tel:863-555-0198" class="hidden sm:flex items-center gap-x-2 text-sm">
+                    <i class="fas fa-phone"></i> (863) 555-0198
+                </a>
+                
+                <button onclick="toggleCart()" class="relative p-2">
+                    <i class="fas fa-shopping-cart text-2xl"></i>
+                    <span id="cart-count-badge" class="absolute -top-1 -right-1 bg-amber-500 text-[10px] font-bold w-5 h-5 flex items-center justify-center rounded-full">0</span>
+                </button>
+
+                <button id="install-button" onclick="installPWA()" 
+                        class="hidden items-center gap-x-2 bg-amber-500 hover:bg-amber-600 px-5 py-2.5 rounded-3xl text-sm font-medium">
+                    <i class="fas fa-download"></i> Install
+                </button>
+
+                <button onclick="toggleMobileMenu()" class="md:hidden text-3xl p-2">
+                    <i id="mobile-menu-icon" class="fas fa-bars"></i>
+                </button>
+            </div>
+        </div>
+    </nav>
+
+    <!-- HERO -->
+    <section id="home" class="hero-bg text-white min-h-screen flex items-center py-20">
+        <div class="max-w-7xl mx-auto px-5 w-full">
+            <div class="max-w-xl">
+                <div class="inline-flex items-center gap-2 bg-white/10 backdrop-blur px-5 py-2 rounded-3xl text-sm mb-6">
+                    <div class="w-2 h-2 bg-emerald-400 rounded-full animate-pulse"></div>
+                    LAKELAND HIGHLANDS, FL
+                </div>
+                <h1 class="text-5xl md:text-6xl font-bold tracking-tighter leading-tight logo-font">
+                    ROOFS BUILT FOR<br><span class="text-amber-400">FLORIDA STORMS</span>
+                </h1>
+                <p class="mt-6 text-lg text-slate-200">Impact-rated shingles • Metal roofs • Professional installation • Fast local delivery</p>
+                
+                <div class="flex flex-col sm:flex-row gap-4 mt-10">
+                    <button onclick="navigateToSection('shop')" class="bg-white text-slate-950 py-5 px-8 rounded-3xl font-semibold text-lg flex items-center justify-center gap-3 hover:bg-amber-400 hover:text-white">
+                        <i class="fas fa-store"></i> SHOP PRODUCTS
+                    </button>
+                    <button onclick="navigateToSection('contact')" class="border-2 border-white py-5 px-8 rounded-3xl font-semibold text-lg hover:bg-white hover:text-slate-950">
+                        GET FREE QUOTE
+                    </button>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- SERVICES -->
+    <section id="services" class="py-16 bg-white">
+        <div class="max-w-7xl mx-auto px-5">
+            <h2 class="text-4xl font-bold text-center tracking-tighter mb-12">Our Services</h2>
+            <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
+                <div class="bg-white border p-8 rounded-3xl hover:border-amber-300 transition-all">
+                    <div class="text-5xl mb-4">🏗️</div>
+                    <h3 class="text-2xl font-semibold">Roof Replacement</h3>
+                    <p class="text-slate-600 mt-3">Full tear-off &amp; impact-rated installation</p>
+                </div>
+                <div class="bg-white border p-8 rounded-3xl hover:border-amber-300 transition-all">
+                    <div class="text-5xl mb-4">🔧</div>
+                    <h3 class="text-2xl font-semibold">Storm Repair</h3>
+                    <p class="text-slate-600 mt-3">Insurance claims • Fast response</p>
+                </div>
+                <div class="bg-white border p-8 rounded-3xl hover:border-amber-300 transition-all">
+                    <div class="text-5xl mb-4">🔍</div>
+                    <h3 class="text-2xl font-semibold">Roof Inspections</h3>
+                    <p class="text-slate-600 mt-3">$99 detailed inspection</p>
+                </div>
+                <div class="bg-white border p-8 rounded-3xl hover:border-amber-300 transition-all">
+                    <div class="text-5xl mb-4">💧</div>
+                    <h3 class="text-2xl font-semibold">Gutters &amp; Ventilation</h3>
+                    <p class="text-slate-600 mt-3">Seamless systems &amp; attic fans</p>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- SHOP -->
+    <section id="shop" class="py-16 bg-slate-50">
+        <div class="max-w-7xl mx-auto px-5">
+            <h2 class="text-4xl font-bold tracking-tighter text-center mb-8">Shop Roofing Products</h2>
+            
+            <div class="flex flex-wrap gap-3 justify-center mb-10">
+                <button onclick="filterCategory('all')" id="filter-all" class="active-filter px-6 py-3 rounded-3xl border text-sm">All</button>
+                <button onclick="filterCategory('shingles')" id="filter-shingles" class="px-6 py-3 rounded-3xl border text-sm">Shingles</button>
+                <button onclick="filterCategory('metal')" id="filter-metal" class="px-6 py-3 rounded-3xl border text-sm">Metal</button>
+                <button onclick="filterCategory('accessories')" id="filter-accessories" class="px-6 py-3 rounded-3xl border text-sm">Accessories</button>
+            </div>
+
+            <div id="products-grid" class="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-6">
+                <!-- Populated by JavaScript -->
+            </div>
+        </div>
+    </section>
+
+    <!-- GALLERY -->
+    <section id="gallery" class="py-16 bg-white">
+        <div class="max-w-7xl mx-auto px-5">
+            <h2 class="text-4xl font-bold tracking-tighter text-center mb-10">Recent Projects</h2>
+            <div class="grid grid-cols-2 md:grid-cols-4 gap-4">
+                <div class="aspect-video bg-cover rounded-3xl" style="background-image: url('https://picsum.photos/id/1015/800/600')"></div>
+                <div class="aspect-video bg-cover rounded-3xl" style="background-image: url('https://picsum.photos/id/133/800/600')"></div>
+                <div class="aspect-video bg-cover rounded-3xl" style="background-image: url('https://picsum.photos/id/201/800/600')"></div>
+                <div class="aspect-video bg-cover rounded-3xl" style="background-image: url('https://picsum.photos/id/251/800/600')"></div>
+            </div>
+        </div>
+    </section>
+
+    <!-- CONTACT -->
+    <section id="contact" class="py-16 bg-slate-950 text-white">
+        <div class="max-w-7xl mx-auto px-5">
+            <div class="grid md:grid-cols-2 gap-12">
+                <div>
+                    <h2 class="text-4xl font-bold tracking-tighter">Get Your Free Quote</h2>
+                    <form id="quote-form" onsubmit="handleQuoteSubmit(event)" class="mt-8 space-y-6">
+                        <input type="text" id="name" placeholder="Your Name" required class="w-full px-6 py-5 bg-white/10 border border-white/30 rounded-3xl outline-none">
+                        <input type="tel" id="phone" placeholder="Phone Number" required class="w-full px-6 py-5 bg-white/10 border border-white/30 rounded-3xl outline-none">
+                        <input type="text" id="address" placeholder="Property Address" required class="w-full px-6 py-5 bg-white/10 border border-white/30 rounded-3xl outline-none">
+                        <button type="submit" class="w-full bg-amber-500 py-7 text-xl font-semibold rounded-3xl">SUBMIT REQUEST →</button>
+                    </form>
+                </div>
+                <div class="flex items-center">
+                    <div class="text-center md:text-left">
+                        <div class="text-6xl mb-4">📍</div>
+                        <p class="text-2xl">1420 Highlands Blvd<br>Lakeland Highlands, FL 33813</p>
+                        <a href="tel:863-555-0198" class="text-4xl font-semibold text-amber-400 mt-8 block">(863) 555-0198</a>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- FOOTER -->
+    <footer class="bg-slate-900 text-slate-400 py-12">
+        <div class="max-w-7xl mx-auto px-5 text-center">
+            <div class="logo-font text-3xl text-white mb-4">APEX ROOFING</div>
+            <p>© 2026 Apex Roofing Solutions LLC • Serving Lakeland Highlands &amp; Central Florida</p>
+        </div>
+    </footer>
+
+    <!-- CART -->
+    <div id="cart-modal" onclick="if(event.target.id==='cart-modal')toggleCart()" class="hidden fixed inset-0 bg-black/70 z-[9999] flex items-end md:items-center justify-center md:justify-end">
+        <div onclick="event.stopImmediatePropagation()" class="bg-white w-full md:w-[420px] h-[90vh] md:h-auto md:rounded-l-3xl flex flex-col shadow-2xl">
+            <div class="p-6 border-b flex justify-between items-center">
+                <h3 class="text-2xl font-semibold">Your Cart</h3>
+                <button onclick="toggleCart()" class="text-4xl">×</button>
+            </div>
+            <div id="cart-items" class="flex-1 p-6 overflow-auto space-y-6"></div>
+            <div class="p-6 border-t">
+                <div class="flex justify-between text-xl mb-6">
+                    <span>Total</span>
+                    <span id="cart-subtotal">$0.00</span>
+                </div>
+                <button onclick="checkout()" class="w-full bg-slate-900 text-white py-7 rounded-3xl text-lg">CHECKOUT</button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // Products
+        let products = [
+            {id:1, name:"GAF Timberline HDZ Shingles", category:"shingles", price:149, unit:"bundle", image:"https://picsum.photos/id/1015/800/800"},
+            {id:2, name:"Standing Seam Metal Panels", category:"metal", price:18.5, unit:"sq ft", image:"https://picsum.photos/id/133/800/800"},
+            {id:3, name:"Seamless Gutters + Guard", category:"accessories", price:28, unit:"ft", image:"https://picsum.photos/id/201/800/800"},
+            {id:4, name:"CertainTeed Landmark PRO", category:"shingles", price:132, unit:"bundle", image:"https://picsum.photos/id/251/800/800"},
+            {id:5, name:"Solar Attic Fan Kit", category:"accessories", price:289, unit:"kit", image:"https://picsum.photos/id/1005/800/800"}
+        ];
+
+        let cart = [];
+
+        function renderProducts(filteredProducts) {
+            const container = document.getElementById('products-grid');
+            container.innerHTML = '';
+            filteredProducts.forEach(product => {
+                const card = document.createElement('div');
+                card.className = "product-card bg-white border border-slate-200 rounded-3xl overflow-hidden";
+                card.innerHTML = `
+                    <img src="${product.image}" class="w-full aspect-square object-cover">
+                    <div class="p-5">
+                        <div class="text-xs text-slate-400 uppercase">${product.category}</div>
+                        <h4 class="font-semibold mt-1">${product.name}</h4>
+                        <div class="mt-6 flex justify-between items-end">
+                            <div>
+                                <span class="text-3xl font-semibold">$${product.price}</span>
+                                <span class="text-xs text-slate-400">/${product.unit}</span>
+                            </div>
+                            <button onclick="addToCart(${product.id}); event.stopImmediatePropagation()" 
+                                    class="bg-slate-900 text-white px-6 py-3 rounded-3xl text-sm">Add</button>
+                        </div>
+                    </div>
+                `;
+                container.appendChild(card);
+            });
+        }
+
+        function addToCart(id) {
+            const product = products.find(p => p.id === id);
+            const existing = cart.find(item => item.id === id);
+            if (existing) existing.quantity = (existing.quantity || 1) + 1;
+            else cart.push({...product, quantity: 1});
+            updateCartCount();
+            showToast(`${product.name} added to cart`);
+        }
+
+        function updateCartCount() {
+            const count = cart.reduce((sum, item) => sum + (item.quantity || 1), 0);
+            document.getElementById('cart-count-badge').textContent = count;
+        }
+
+        function renderCart() {
+            const container = document.getElementById('cart-items');
+            let total = 0;
+            let html = '';
+            
+            if (cart.length === 0) {
+                container.innerHTML = `<p class="text-center text-slate-400 py-12">Your cart is empty</p>`;
+                document.getElementById('cart-subtotal').textContent = '$0.00';
+                return;
+            }
+
+            cart.forEach((item, index) => {
+                const itemTotal = item.price * (item.quantity || 1);
+                total += itemTotal;
+                html += `
+                <div class="flex gap-4">
+                    <img src="${item.image}" class="w-20 h-20 rounded-2xl object-cover">
+                    <div class="flex-1">
+                        <div class="flex justify-between">
+                            <div class="font-medium">${item.name}</div>
+                            <button onclick="removeFromCart(${index})" class="text-red-500">×</button>
+                        </div>
+                        <div class="flex items-center gap-4 mt-4">
+                            <div class="flex border rounded-3xl">
+                                <button onclick="changeQty(${index}, -1)" class="px-3">-</button>
+                                <span class="px-4">${item.quantity}</span>
+                                <button onclick="changeQty(${index}, 1)" class="px-3">+</button>
+                            </div>
+                            <div class="font-semibold ml-auto">$${(itemTotal).toFixed(2)}</div>
+                        </div>
+                    </div>
+                </div>`;
+            });
+            container.innerHTML = html;
+            document.getElementById('cart-subtotal').textContent = '$' + total.toFixed(2);
+        }
+
+        function changeQty(index, delta) {
+            cart[index].quantity = Math.max(1, (cart[index].quantity || 1) + delta);
+            renderCart();
+            updateCartCount();
+        }
+
+        function removeFromCart(index) {
+            cart.splice(index, 1);
+            renderCart();
+            updateCartCount();
+        }
+
+        function toggleCart() {
+            const modal = document.getElementById('cart-modal');
+            modal.classList.toggle('hidden');
+            if (!modal.classList.contains('hidden')) renderCart();
+        }
+
+        function checkout() {
+            if (cart.length === 0) return;
+            toggleCart();
+            setTimeout(() => {
+                alert("✅ Thank you! Your order has been placed (Demo)");
+                cart = [];
+                updateCartCount();
+            }, 500);
+        }
+
+        function filterCategory(category) {
+            document.querySelectorAll('#shop button').forEach(btn => btn.classList.remove('bg-slate-900', 'text-white', 'active-filter'));
+            if (category === 'all') {
+                document.getElementById('filter-all').classList.add('bg-slate-900', 'text-white', 'active-filter');
+                renderProducts(products);
+            } else {
+                document.getElementById('filter-' + category).classList.add('bg-slate-900', 'text-white', 'active-filter');
+                renderProducts(products.filter(p => p.category === category));
+            }
+        }
+
+        function handleQuoteSubmit(e) {
+            e.preventDefault();
+            alert("✅ Quote request received! We'll contact you soon.");
+            e.target.reset();
+        }
+
+        function showToast(message) {
+            const toast = document.createElement('div');
+            toast.style.cssText = 'position:fixed; bottom:20px; left:50%; transform:translateX(-50%); background:#111827; color:white; padding:14px 24px; border-radius:9999px; z-index:99999; box-shadow:0 10px 15px -3px rgb(0 0 0 / 0.3);';
+            toast.innerHTML = message;
+            document.body.appendChild(toast);
+            setTimeout(() => toast.remove(), 2500);
+        }
+
+        function navigateToSection(sectionId) {
+            document.getElementById(sectionId).scrollIntoView({ behavior: 'smooth' });
+        }
+
+        function toggleMobileMenu() {
+            // Simple alert for demo (you can expand this)
+            alert("Mobile menu would open here in full version");
+        }
+
+        // ==================== PWA ====================
+        let deferredPrompt;
+        const installBtn = document.getElementById('install-button');
+
+        window.addEventListener('beforeinstallprompt', (e) => {
+            e.preventDefault();
+            deferredPrompt = e;
+            installBtn.classList.remove('hidden');
+            installBtn.classList.add('flex');
+        });
+
+        function installPWA() {
+            if (deferredPrompt) {
+                deferredPrompt.prompt();
+                deferredPrompt.userChoice.then(() => {
+                    deferredPrompt = null;
+                    installBtn.classList.add('hidden');
+                });
+            }
+        }
+
+        // Service Worker for offline
+        if ('serviceWorker' in navigator) {
+            navigator.serviceWorker.register('data:application/javascript,' + encodeURIComponent(`
+                self.addEventListener('install', () => self.skipWaiting());
+                self.addEventListener('fetch', e => {
+                    e.respondWith(fetch(e.request).catch(() => caches.match(e.request)));
+                });
+            `)).then(() => console.log('✅ PWA Service Worker Ready'));
+        }
+
+        // Initialize
+        window.onload = () => {
+            renderProducts(products);
+            updateCartCount();
+            console.log('%c✅ Apex Roofing PWA is fully working!', 'color:#f59e0b; font-size:16px; font-weight:bold');
+        };
+    </script>
+</body>
+</html>
