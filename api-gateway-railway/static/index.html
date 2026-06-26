@@ -581,6 +581,9 @@
       <button class="nav-item" onclick="showPage('office-map')">
         ☎️ Office Map <span class="badge" id="badge-officemap">—</span>
       </button>
+      <button class="nav-item" onclick="showPage('operations')">
+        ⚙️ Operations <span class="badge" id="badge-operations">—</span>
+      </button>
     </div>
     <div class="nav-section">
       <div class="nav-label">Automation</div>
@@ -741,6 +744,92 @@
       When a patient dials one of these numbers, the Retell agent resolves the office automatically —
       no need to ask which location. The number Retell reports as <code style="font-family:var(--mono);font-size:11px;background:var(--surface2);padding:1px 5px;border-radius:3px">to_number</code> is matched here.
     </p>
+  </div>
+</div>
+
+<!-- OPERATIONS -->
+<div id="page-operations" class="page" style="display:none">
+  <div class="topbar">
+    <h2>API Operations</h2>
+    <div class="topbar-actions">
+      <button class="btn btn-primary" onclick="openOperationModal()">+ Add Operation</button>
+    </div>
+  </div>
+  <div class="content">
+    <p class="muted" style="margin-bottom:16px">
+      Named API operations — configurable paths and default params per endpoint, so paths aren't hardcoded in Python.
+    </p>
+    <div class="table-wrap">
+      <table>
+        <thead><tr>
+          <th>Name</th><th>Endpoint</th><th>Method</th><th>Path</th><th>Default Params</th><th>Status</th><th></th>
+        </tr></thead>
+        <tbody id="operations-body">
+          <tr><td colspan="7" class="muted" style="text-align:center;padding:40px">Loading...</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
+<!-- OPERATION MODAL -->
+<div class="modal-overlay" id="operation-modal">
+  <div class="modal" style="width:560px">
+    <div class="modal-head">
+      <h3 id="operation-modal-title">Add Operation</h3>
+      <button class="modal-close" onclick="closeModal('operation-modal')">&times;</button>
+    </div>
+    <div class="modal-body">
+      <input type="hidden" id="op-id">
+      <div class="form-grid">
+        <div class="form-group full">
+          <label>Name (slug — unique id used in code)</label>
+          <input id="op-name" placeholder="denticon-appointments">
+        </div>
+        <div class="form-group full">
+          <label>Label</label>
+          <input id="op-label" placeholder="Fetch Appointments">
+        </div>
+        <div class="form-group">
+          <label>Endpoint</label>
+          <select id="op-endpoint"></select>
+        </div>
+        <div class="form-group">
+          <label>Method</label>
+          <select id="op-method">
+            <option>GET</option><option>POST</option><option>PUT</option>
+            <option>PATCH</option><option>DELETE</option>
+          </select>
+        </div>
+        <div class="form-group full">
+          <label>Path (use {patient_id} or {id} for path params)</label>
+          <input id="op-path" placeholder="/denticon/appointments/v0/">
+        </div>
+        <div class="form-group full">
+          <label>Default Params (JSON)</label>
+          <textarea id="op-params" rows="3" placeholder='{"PageSize": 500}'>{}</textarea>
+        </div>
+        <div class="form-group full">
+          <label>Description (optional)</label>
+          <input id="op-desc" placeholder="What this operation does">
+        </div>
+        <div class="form-group">
+          <label>Tags (comma-separated)</label>
+          <input id="op-tags" placeholder="denticon, appointments">
+        </div>
+        <div class="form-group">
+          <label>Status</label>
+          <select id="op-active">
+            <option value="true">Active</option>
+            <option value="false">Inactive</option>
+          </select>
+        </div>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-ghost" onclick="closeModal('operation-modal')">Cancel</button>
+      <button class="btn btn-primary" onclick="saveOperation()">Save Operation</button>
+    </div>
   </div>
 </div>
 
@@ -1187,6 +1276,7 @@ function showPage(id) {
   if (id === 'projects')        loadProjects();
   if (id === 'endpoints')       loadEndpoints();
   if (id === 'office-map')      loadOfficeMap();
+  if (id === 'operations')      loadOperations();
   if (id === 'jobs')            loadJobs();
   if (id === 'webhooks-page')   { loadWebhookEvents(''); setWebhookUrls(); }
   if (id === 'call-logs')       loadLogs(0);
@@ -1976,6 +2066,102 @@ async function runTool(t) {
   } finally {
     btn.disabled = false;
   }
+}
+
+// ── Operations ──────────────────────────────────────────────────────
+let _operations = [];
+let _operationEndpoints = [];
+
+async function loadOperations() {
+  try {
+    const [ops, eps] = await Promise.all([
+      api('/api/operations'),
+      api('/api/endpoints'),
+    ]);
+    _operations = ops || [];
+    _operationEndpoints = eps || [];
+    document.getElementById('badge-operations').textContent = _operations.length;
+    renderOperations();
+  } catch(e) { toast(e.message, 'error'); }
+}
+
+function renderOperations() {
+  const tbody = document.getElementById('operations-body');
+  if (!tbody) return;
+  if (!_operations.length) {
+    tbody.innerHTML = '<tr><td colspan="7"><div class="empty"><div class="icon">⚙️</div><p>No operations configured yet. Add one to get started.</p></div></td></tr>';
+    return;
+  }
+  tbody.innerHTML = _operations.map(op => `
+    <tr>
+      <td><span class="mono" style="font-size:12px"><strong>${op.name}</strong></span>${op.label ? '<br><span class="muted" style="font-size:11px">'+op.label+'</span>' : ''}</td>
+      <td><span class="pill info">${op.endpoint_name}</span></td>
+      <td><span class="pill info">${op.method}</span></td>
+      <td class="mono muted" style="font-size:11px;max-width:200px;overflow:hidden;text-overflow:ellipsis">${op.path}</td>
+      <td class="muted" style="font-size:11px">${op.default_params && Object.keys(op.default_params).length ? JSON.stringify(op.default_params) : '—'}</td>
+      <td><div class="status-dot ${op.is_active ? 'online' : 'offline'}"></div></td>
+      <td>
+        <div style="display:flex;gap:4px">
+          <button class="btn btn-ghost btn-sm" onclick="editOperation(${op.id})">Edit</button>
+          <button class="btn btn-danger btn-sm" onclick="deleteOperation(${op.id}, '${op.name}')">✕</button>
+        </div>
+      </td>
+    </tr>
+  `).join('');
+}
+
+function openOperationModal(op) {
+  document.getElementById('op-id').value = op ? op.id : '';
+  document.getElementById('op-name').value = op ? op.name : '';
+  document.getElementById('op-label').value = op ? (op.label || '') : '';
+  document.getElementById('op-path').value = op ? op.path : '';
+  document.getElementById('op-method').value = op ? op.method : 'GET';
+  document.getElementById('op-active').value = op ? String(op.is_active) : 'true';
+  document.getElementById('op-params').value = op ? JSON.stringify(op.default_params || {}, null, 2) : '{}';
+  document.getElementById('op-desc').value = op ? (op.description || '') : '';
+  document.getElementById('op-tags').value = op ? (op.tags || []).join(', ') : '';
+  document.getElementById('operation-modal-title').textContent = op ? 'Edit Operation' : 'Add Operation';
+  const sel = document.getElementById('op-endpoint');
+  sel.innerHTML = _operationEndpoints.map(e =>
+    `<option value="${e.name}" ${op && op.endpoint_name === e.name ? 'selected' : ''}>${e.name}</option>`
+  ).join('');
+  document.getElementById('operation-modal').classList.add('open');
+}
+
+function editOperation(id) {
+  const op = _operations.find(o => o.id === id);
+  if (op) openOperationModal(op);
+}
+
+async function saveOperation() {
+  const id = document.getElementById('op-id').value;
+  let defaultParams = {};
+  try { defaultParams = JSON.parse(document.getElementById('op-params').value || '{}'); }
+  catch { return toast('Default Params must be valid JSON', 'error'); }
+  const tags = document.getElementById('op-tags').value.split(',').map(t => t.trim()).filter(Boolean);
+  const payload = {
+    name: document.getElementById('op-name').value.trim(),
+    label: document.getElementById('op-label').value.trim(),
+    endpoint_name: document.getElementById('op-endpoint').value,
+    method: document.getElementById('op-method').value,
+    path: document.getElementById('op-path').value.trim(),
+    default_params: defaultParams,
+    description: document.getElementById('op-desc').value.trim(),
+    tags,
+    is_active: document.getElementById('op-active').value === 'true',
+  };
+  if (!payload.name || !payload.path) return toast('Name and Path are required', 'error');
+  try {
+    if (id) { await api(`/api/operations/${id}`, 'PUT', payload); toast('Operation updated'); }
+    else    { await api('/api/operations', 'POST', payload); toast('Operation created'); }
+    closeModal('operation-modal'); loadOperations();
+  } catch(e) { toast(e.message, 'error'); }
+}
+
+async function deleteOperation(id, name) {
+  if (!confirm(`Delete operation "${name}"?`)) return;
+  await api(`/api/operations/${id}`, 'DELETE');
+  toast('Operation deleted'); loadOperations();
 }
 
 // ── Settings ──────────────────────────────────────────────────────────────────
