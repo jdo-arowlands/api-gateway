@@ -14,8 +14,10 @@ from pydantic import BaseModel
 from typing import Any, Optional
 from datetime import datetime
 from sqlalchemy.orm import Session
+from denticon_proxy import router as denticon_proxy_router
+app.include_router(denticon_proxy_router)
 
-from database import get_db, APIEndpoint, APICallLog, AppSetting, SessionLocal, Project, OfficePhoneMap, APIOperation
+from database import get_db, APIEndpoint, APICallLog, AppSetting, SessionLocal, Project, OfficePhoneMap
 import actions  # noqa — registers all @register_action decorators on startup
 from api_caller import APICaller
 from scheduler import scheduler_service, JobDefinition, JobRunLog, JOB_REGISTRY, register_action
@@ -31,7 +33,7 @@ _AUTH_ENABLED = bool(_DASH_PASS)
 
 # Paths that never require a login: the login flow itself, health check,
 # and inbound webhooks (called by Retell / forms with their own secrets).
-_PUBLIC_PREFIXES = ("/login", "/logout", "/health", "/webhooks", "/static")
+_PUBLIC_PREFIXES = ("/login", "/logout", "/health", "/webhooks", "/static", "/proxy")
 
 def _is_public(path: str) -> bool:
     return any(path == p or path.startswith(p + "/") for p in _PUBLIC_PREFIXES)
@@ -320,76 +322,6 @@ async def run_admin_tool(key: str, body: ToolRun = ToolRun()):
         db.close()
 
 
-# ── API Operations (named, configurable operations) ──────────────────────────
-
-class OperationCreate(BaseModel):
-    name: str
-    label: Optional[str] = None
-    description: Optional[str] = None
-    endpoint_name: str
-    method: Optional[str] = "GET"
-    path: str
-    default_params: Optional[dict] = {}
-    default_body: Optional[dict] = {}
-    tags: Optional[list] = []
-    is_active: Optional[bool] = True
-
-
-@app.get("/api/operations")
-def list_operations(db: Session = Depends(get_db)):
-    rows = db.query(APIOperation).order_by(APIOperation.name).all()
-    return [_operation_out(o) for o in rows]
-
-
-@app.post("/api/operations", status_code=201)
-def create_operation(data: OperationCreate, db: Session = Depends(get_db)):
-    if db.query(APIOperation).filter(APIOperation.name == data.name).first():
-        raise HTTPException(400, f"An operation named '{data.name}' already exists")
-    # Link to endpoint by name if it exists
-    ep = db.query(APIEndpoint).filter(APIEndpoint.name == data.endpoint_name).first()
-    payload = data.model_dump()
-    o = APIOperation(**payload, endpoint_id=ep.id if ep else None,
-                     project_id=ep.project_id if ep else None)
-    db.add(o); db.commit(); db.refresh(o)
-    return _operation_out(o)
-
-
-@app.put("/api/operations/{oid}")
-def update_operation(oid: int, data: dict, db: Session = Depends(get_db)):
-    o = db.query(APIOperation).filter(APIOperation.id == oid).first()
-    if not o: raise HTTPException(404, "Not found")
-    for k, v in data.items():
-        if k in ("id", "created_at"):
-            continue
-        if hasattr(o, k):
-            setattr(o, k, v)
-    # keep endpoint_id / project_id in sync if endpoint_name changed
-    if "endpoint_name" in data:
-        ep = db.query(APIEndpoint).filter(APIEndpoint.name == o.endpoint_name).first()
-        o.endpoint_id = ep.id if ep else None
-        o.project_id = ep.project_id if ep else None
-    db.commit(); db.refresh(o)
-    return _operation_out(o)
-
-
-@app.delete("/api/operations/{oid}", status_code=204)
-def delete_operation(oid: int, db: Session = Depends(get_db)):
-    o = db.query(APIOperation).filter(APIOperation.id == oid).first()
-    if not o: raise HTTPException(404, "Not found")
-    db.delete(o); db.commit()
-
-
-def _operation_out(o: APIOperation) -> dict:
-    return {
-        "id": o.id, "name": o.name, "label": o.label,
-        "description": o.description, "endpoint_name": o.endpoint_name,
-        "method": o.method, "path": o.path,
-        "default_params": o.default_params or {},
-        "tags": o.tags or [], "is_active": o.is_active,
-        "created_at": o.created_at,
-    }
-
-
 # ── Endpoints (API connections) ───────────────────────────────────────────────
 
 class EndpointCreate(BaseModel):
@@ -471,6 +403,7 @@ async def test_endpoint(eid: int, db: Session = Depends(get_db)):
     from token_manager import TokenManager
     tm = TokenManager(db)
     token = await tm.get_token(e)
+    db.refresh(e)  # re-read from DB to get updated token_expires_at
     return {"success": bool(token), "token_preview": (token or "")[:20] + "..." if token else None,
             "expires_at": e.token_expires_at}
 
@@ -722,6 +655,82 @@ async def manual_call(req: ManualCallRequest, db: Session = Depends(get_db)):
     )
     return result
 
+
+
+
+# ── Operations ────────────────────────────────────────────────────────────────
+
+class OperationCreate(BaseModel):
+    name: str
+    label: Optional[str] = None
+    description: Optional[str] = None
+    endpoint_name: str
+    method: str = "GET"
+    path: str
+    default_params: Optional[dict] = {}
+    default_body: Optional[dict] = {}
+    is_active: Optional[bool] = True
+    tags: Optional[list] = []
+
+
+@app.get("/api/operations")
+def list_operations(db: Session = Depends(get_db)):
+    from database import APIOperation
+    ops = db.query(APIOperation).order_by(APIOperation.endpoint_name, APIOperation.name).all()
+    return [_op_out(o) for o in ops]
+
+
+@app.post("/api/operations", status_code=201)
+def create_operation(data: OperationCreate, db: Session = Depends(get_db)):
+    from database import APIOperation
+    # Resolve endpoint_id
+    ep = db.query(APIEndpoint).filter(APIEndpoint.name == data.endpoint_name).first()
+    op = APIOperation(
+        **data.model_dump(),
+        endpoint_id=ep.id if ep else None,
+    )
+    db.add(op); db.commit(); db.refresh(op)
+    return _op_out(op)
+
+
+@app.put("/api/operations/{oid}")
+def update_operation(oid: int, data: OperationCreate, db: Session = Depends(get_db)):
+    from database import APIOperation
+    op = db.query(APIOperation).filter(APIOperation.id == oid).first()
+    if not op: raise HTTPException(404, "Not found")
+    ep = db.query(APIEndpoint).filter(APIEndpoint.name == data.endpoint_name).first()
+    for k, v in data.model_dump().items():
+        setattr(op, k, v)
+    op.endpoint_id = ep.id if ep else None
+    db.commit(); db.refresh(op)
+    return _op_out(op)
+
+
+@app.delete("/api/operations/{oid}", status_code=204)
+def delete_operation(oid: int, db: Session = Depends(get_db)):
+    from database import APIOperation
+    op = db.query(APIOperation).filter(APIOperation.id == oid).first()
+    if not op: raise HTTPException(404, "Not found")
+    db.delete(op); db.commit()
+
+
+def _op_out(op) -> dict:
+    return {
+        "id": op.id,
+        "name": op.name,
+        "label": op.label,
+        "description": op.description,
+        "endpoint_name": op.endpoint_name,
+        "endpoint_id": op.endpoint_id,
+        "method": op.method,
+        "path": op.path,
+        "default_params": op.default_params or {},
+        "default_body": op.default_body or {},
+        "is_active": op.is_active,
+        "tags": op.tags or [],
+        "created_at": op.created_at,
+        "updated_at": op.updated_at,
+    }
 
 # ── Health check (Railway uses this) ─────────────────────────────────────────
 

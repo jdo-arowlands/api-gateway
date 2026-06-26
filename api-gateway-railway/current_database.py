@@ -62,8 +62,7 @@ class Project(Base):
     created_at  = Column(DateTime, default=datetime.utcnow)
     updated_at  = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
-    endpoints  = relationship("APIEndpoint", back_populates="project")
-    operations = relationship("APIOperation", back_populates="project")
+    endpoints = relationship("APIEndpoint", back_populates="project")
 
 
 class APIEndpoint(Base):
@@ -92,44 +91,8 @@ class APIEndpoint(Base):
     extra_headers   = Column(JSON, default=dict)   # any static headers to inject
     default_timeout = Column(Integer, default=30)
 
-    calls      = relationship("APICallLog", back_populates="endpoint")
-    project    = relationship("Project", back_populates="endpoints")
-    operations = relationship("APIOperation", back_populates="endpoint")
-
-
-class APIOperation(Base):
-    """
-    A named, configurable API operation — a specific path + method on an endpoint.
-    Keeps paths and default params out of Python code and in the portal DB.
-
-    Example:
-        name:            denticon-appointments
-        endpoint_name:   denticon
-        method:          GET
-        path:            /denticon/appointments/v0/
-        default_params:  {"PageSize": 500, "PageNumber": 1}
-    """
-    __tablename__ = "api_operations"
-
-    id             = Column(Integer, primary_key=True, index=True)
-    name           = Column(String(200), unique=True, nullable=False)  # slug
-    label          = Column(String(200))
-    description    = Column(Text)
-    endpoint_id    = Column(Integer, ForeignKey("api_endpoints.id"), nullable=True)
-    endpoint_name  = Column(String(100), nullable=False)               # denormalized
-    project_id     = Column(Integer, ForeignKey("projects.id"), nullable=True)
-    method         = Column(String(10), default="GET")
-    path           = Column(String(500), nullable=False)
-    default_params = Column(JSON, default=dict)
-    default_body   = Column(JSON, default=dict)
-    response_map   = Column(JSON, default=dict)
-    is_active      = Column(Boolean, default=True)
-    tags           = Column(JSON, default=list)
-    created_at     = Column(DateTime, default=datetime.utcnow)
-    updated_at     = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
-
-    endpoint = relationship("APIEndpoint", back_populates="operations")
-    project  = relationship("Project", back_populates="operations")
+    calls   = relationship("APICallLog", back_populates="endpoint")
+    project = relationship("Project", back_populates="endpoints")
 
 
 class APICallLog(Base):
