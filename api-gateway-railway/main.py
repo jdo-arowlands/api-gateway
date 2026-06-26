@@ -14,7 +14,6 @@ from pydantic import BaseModel
 from typing import Any, Optional
 from datetime import datetime
 from sqlalchemy.orm import Session
-from denticon_proxy import router as denticon_proxy_router
 
 from database import get_db, APIEndpoint, APICallLog, AppSetting, SessionLocal, Project, OfficePhoneMap
 import actions  # noqa — registers all @register_action decorators on startup
@@ -32,7 +31,7 @@ _AUTH_ENABLED = bool(_DASH_PASS)
 
 # Paths that never require a login: the login flow itself, health check,
 # and inbound webhooks (called by Retell / forms with their own secrets).
-_PUBLIC_PREFIXES = ("/login", "/logout", "/health", "/webhooks", "/static", "/proxy")
+_PUBLIC_PREFIXES = ("/login", "/logout", "/health", "/webhooks", "/static")
 
 def _is_public(path: str) -> bool:
     return any(path == p or path.startswith(p + "/") for p in _PUBLIC_PREFIXES)
@@ -119,8 +118,9 @@ app.add_middleware(
     https_only=False,   # Railway terminates TLS at the edge; cookie still travels over HTTPS
 )
 
+
 app.include_router(webhook_router)
-app.include_router(denticon_proxy_router)
+
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # ENDPOINTS — grouped by resource
@@ -401,7 +401,6 @@ async def test_endpoint(eid: int, db: Session = Depends(get_db)):
     from token_manager import TokenManager
     tm = TokenManager(db)
     token = await tm.get_token(e)
-    db.refresh(e)  # re-read from DB to get updated token_expires_at
     return {"success": bool(token), "token_preview": (token or "")[:20] + "..." if token else None,
             "expires_at": e.token_expires_at}
 
@@ -653,82 +652,6 @@ async def manual_call(req: ManualCallRequest, db: Session = Depends(get_db)):
     )
     return result
 
-
-
-
-# ── Operations ────────────────────────────────────────────────────────────────
-
-class OperationCreate(BaseModel):
-    name: str
-    label: Optional[str] = None
-    description: Optional[str] = None
-    endpoint_name: str
-    method: str = "GET"
-    path: str
-    default_params: Optional[dict] = {}
-    default_body: Optional[dict] = {}
-    is_active: Optional[bool] = True
-    tags: Optional[list] = []
-
-
-@app.get("/api/operations")
-def list_operations(db: Session = Depends(get_db)):
-    from database import APIOperation
-    ops = db.query(APIOperation).order_by(APIOperation.endpoint_name, APIOperation.name).all()
-    return [_op_out(o) for o in ops]
-
-
-@app.post("/api/operations", status_code=201)
-def create_operation(data: OperationCreate, db: Session = Depends(get_db)):
-    from database import APIOperation
-    # Resolve endpoint_id
-    ep = db.query(APIEndpoint).filter(APIEndpoint.name == data.endpoint_name).first()
-    op = APIOperation(
-        **data.model_dump(),
-        endpoint_id=ep.id if ep else None,
-    )
-    db.add(op); db.commit(); db.refresh(op)
-    return _op_out(op)
-
-
-@app.put("/api/operations/{oid}")
-def update_operation(oid: int, data: OperationCreate, db: Session = Depends(get_db)):
-    from database import APIOperation
-    op = db.query(APIOperation).filter(APIOperation.id == oid).first()
-    if not op: raise HTTPException(404, "Not found")
-    ep = db.query(APIEndpoint).filter(APIEndpoint.name == data.endpoint_name).first()
-    for k, v in data.model_dump().items():
-        setattr(op, k, v)
-    op.endpoint_id = ep.id if ep else None
-    db.commit(); db.refresh(op)
-    return _op_out(op)
-
-
-@app.delete("/api/operations/{oid}", status_code=204)
-def delete_operation(oid: int, db: Session = Depends(get_db)):
-    from database import APIOperation
-    op = db.query(APIOperation).filter(APIOperation.id == oid).first()
-    if not op: raise HTTPException(404, "Not found")
-    db.delete(op); db.commit()
-
-
-def _op_out(op) -> dict:
-    return {
-        "id": op.id,
-        "name": op.name,
-        "label": op.label,
-        "description": op.description,
-        "endpoint_name": op.endpoint_name,
-        "endpoint_id": op.endpoint_id,
-        "method": op.method,
-        "path": op.path,
-        "default_params": op.default_params or {},
-        "default_body": op.default_body or {},
-        "is_active": op.is_active,
-        "tags": op.tags or [],
-        "created_at": op.created_at,
-        "updated_at": op.updated_at,
-    }
 
 # ── Health check (Railway uses this) ─────────────────────────────────────────
 

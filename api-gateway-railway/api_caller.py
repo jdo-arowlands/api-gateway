@@ -8,10 +8,6 @@ One-stop function for every outbound call:
   4. Execute the HTTP request
   5. Write a full APICallLog record regardless of success/failure
   6. Return a structured result dict
-
-call_operation() — new method that looks up a named APIOperation from the DB,
-merges default params, and dispatches via the existing call() method.
-This keeps all paths/params in the portal, not in Python code.
 """
 import time
 import json
@@ -20,7 +16,7 @@ import httpx
 from datetime import datetime
 from typing import Any
 from sqlalchemy.orm import Session
-from database import APIEndpoint, APICallLog, APIOperation
+from database import APIEndpoint, APICallLog
 from token_manager import TokenManager
 
 logger = logging.getLogger("api_caller")
@@ -32,54 +28,6 @@ class APICaller:
         self.token_mgr = TokenManager(db)
 
     # ── Public ────────────────────────────────────────────────────────────────
-
-    async def call_operation(
-        self,
-        operation_name: str,
-        *,
-        params: dict | None = None,
-        body: Any = None,
-        extra_headers: dict | None = None,
-        triggered_by: str = "system",
-    ) -> dict:
-        """
-        Execute a named API operation configured in the portal.
-
-        Looks up the APIOperation row by name, merges default_params with any
-        runtime params passed in (runtime params take precedence), then calls
-        the underlying endpoint via call().
-
-        Returns the same structured result dict as call().
-        """
-        op = self.db.query(APIOperation).filter(
-            APIOperation.name == operation_name,
-            APIOperation.is_active == True,
-        ).first()
-
-        if not op:
-            return self._err(
-                f"Operation '{operation_name}' not found or inactive",
-                None, 0, ""
-            )
-
-        # Merge default params from portal config with runtime params
-        # Runtime params take precedence over defaults
-        merged_params = {**(op.default_params or {}), **(params or {})}
-
-        # Merge default body similarly
-        merged_body = body
-        if op.default_body and not body:
-            merged_body = op.default_body
-
-        return await self.call(
-            op.endpoint_name,
-            op.method,
-            op.path,
-            params=merged_params or None,
-            body=merged_body,
-            extra_headers=extra_headers,
-            triggered_by=triggered_by,
-        )
 
     async def call(
         self,
@@ -116,6 +64,12 @@ class APICaller:
         headers = await self._build_headers(endpoint, extra_headers)
         token_refreshed = headers.pop("__token_refreshed__", False)
 
+        # Drop query params with no real value. Retell can send keys with empty
+        # strings (e.g. ProviderId=, StartDate=) when the agent didn't collect
+        # them; passing those to the API can cause 400s or bad filtering.
+        # Keep genuine values including 0 and false; drop None / "" / whitespace.
+        clean_params = self._clean_params(params)
+
         start = time.monotonic()
         status_code = None
         response_body = None
@@ -130,7 +84,7 @@ class APICaller:
                     method.upper(),
                     url,
                     headers=headers,
-                    params=params,
+                    params=clean_params,
                     json=body if body is not None else None,
                 )
 
@@ -154,6 +108,7 @@ class APICaller:
             error_msg = str(exc)
             logger.error(f"[{endpoint_name}] Request failed: {error_msg}")
 
+        # ── Log ───────────────────────────────────────────────────────────────
         log = APICallLog(
             endpoint_id=endpoint.id,
             endpoint_name=endpoint_name,
@@ -193,9 +148,13 @@ class APICaller:
         headers = {"Content-Type": "application/json", "Accept": "application/json"}
         token_refreshed = False
 
+        # Static headers configured on the endpoint
         if endpoint.extra_headers:
             headers.update(endpoint.extra_headers)
 
+        # Shared subscription key from the endpoint's project (if any).
+        # Lets one key (e.g. PDDS-Subscription-Key) cover every endpoint in a
+        # project without entering it per-endpoint.
         try:
             project = endpoint.project
         except Exception:
@@ -203,6 +162,7 @@ class APICaller:
         if project and project.sub_key_header and project.sub_key_value:
             headers[project.sub_key_header] = project.sub_key_value
 
+        # Auth
         if endpoint.auth_type in ("bearer", "oauth2"):
             old_token = endpoint.current_token
             token = await self.token_mgr.get_token(endpoint)
@@ -225,14 +185,47 @@ class APICaller:
         headers["__token_refreshed__"] = token_refreshed
         return headers
 
+    # Header names whose values must never be written to logs (lowercased).
     _SENSITIVE_HEADERS = {
         "authorization", "x-api-key", "ocp-apim-subscription-key",
         "api-key", "apikey", "x-subscription-key", "subscription-key",
         "__token_refreshed__",
     }
+    # Substrings that mark a header as secret even if the exact name varies.
     _SENSITIVE_HINTS = ("secret", "token", "subscription-key", "apikey", "api-key", "password")
 
+    @staticmethod
+    def _clean_params(params: dict | None) -> dict | None:
+        """
+        Remove query params that have no real value so they aren't sent to the API.
+        Dropped: None, empty string, whitespace-only string, and the literal
+        strings 'null'/'undefined'/'none' (which agents sometimes emit).
+        Kept: everything else, including 0, 0.0, and False.
+        Also trims surrounding whitespace from string values.
+        """
+        if not params:
+            return params
+        cleaned = {}
+        for k, v in params.items():
+            if v is None:
+                continue
+            if isinstance(v, str):
+                vs = v.strip()
+                if vs == "" or vs.lower() in ("null", "undefined", "none"):
+                    continue
+                cleaned[k] = vs
+            elif isinstance(v, (list, tuple)):
+                # keep only non-empty items; drop the param entirely if all empty
+                items = [x for x in v if not (x is None or
+                         (isinstance(x, str) and x.strip() == ""))]
+                if items:
+                    cleaned[k] = items
+            else:
+                cleaned[k] = v
+        return cleaned
+
     def _safe_headers(self, headers: dict) -> dict:
+        """Redact sensitive values before storing in logs."""
         redacted = {}
         for k, v in headers.items():
             kl = k.lower()
