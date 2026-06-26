@@ -15,7 +15,7 @@ from typing import Any, Optional
 from datetime import datetime
 from sqlalchemy.orm import Session
 
-from database import get_db, APIEndpoint, APICallLog, AppSetting, SessionLocal, Project, OfficePhoneMap, APIOperation
+from database import get_db, APIEndpoint, APICallLog, AppSetting, SessionLocal, Project, OfficePhoneMap
 import actions  # noqa — registers all @register_action decorators on startup
 from api_caller import APICaller
 from scheduler import scheduler_service, JobDefinition, JobRunLog, JOB_REGISTRY, register_action
@@ -318,76 +318,6 @@ async def run_admin_tool(key: str, body: ToolRun = ToolRun()):
         return await run_tool(key, body.params or {}, db)
     finally:
         db.close()
-
-
-# ── API Operations (named, configurable operations) ──────────────────────────
-
-class OperationCreate(BaseModel):
-    name: str
-    label: Optional[str] = None
-    description: Optional[str] = None
-    endpoint_name: str
-    method: Optional[str] = "GET"
-    path: str
-    default_params: Optional[dict] = {}
-    default_body: Optional[dict] = {}
-    tags: Optional[list] = []
-    is_active: Optional[bool] = True
-
-
-@app.get("/api/operations")
-def list_operations(db: Session = Depends(get_db)):
-    rows = db.query(APIOperation).order_by(APIOperation.name).all()
-    return [_operation_out(o) for o in rows]
-
-
-@app.post("/api/operations", status_code=201)
-def create_operation(data: OperationCreate, db: Session = Depends(get_db)):
-    if db.query(APIOperation).filter(APIOperation.name == data.name).first():
-        raise HTTPException(400, f"An operation named '{data.name}' already exists")
-    # Link to endpoint by name if it exists
-    ep = db.query(APIEndpoint).filter(APIEndpoint.name == data.endpoint_name).first()
-    payload = data.model_dump()
-    o = APIOperation(**payload, endpoint_id=ep.id if ep else None,
-                     project_id=ep.project_id if ep else None)
-    db.add(o); db.commit(); db.refresh(o)
-    return _operation_out(o)
-
-
-@app.put("/api/operations/{oid}")
-def update_operation(oid: int, data: dict, db: Session = Depends(get_db)):
-    o = db.query(APIOperation).filter(APIOperation.id == oid).first()
-    if not o: raise HTTPException(404, "Not found")
-    for k, v in data.items():
-        if k in ("id", "created_at"):
-            continue
-        if hasattr(o, k):
-            setattr(o, k, v)
-    # keep endpoint_id / project_id in sync if endpoint_name changed
-    if "endpoint_name" in data:
-        ep = db.query(APIEndpoint).filter(APIEndpoint.name == o.endpoint_name).first()
-        o.endpoint_id = ep.id if ep else None
-        o.project_id = ep.project_id if ep else None
-    db.commit(); db.refresh(o)
-    return _operation_out(o)
-
-
-@app.delete("/api/operations/{oid}", status_code=204)
-def delete_operation(oid: int, db: Session = Depends(get_db)):
-    o = db.query(APIOperation).filter(APIOperation.id == oid).first()
-    if not o: raise HTTPException(404, "Not found")
-    db.delete(o); db.commit()
-
-
-def _operation_out(o: APIOperation) -> dict:
-    return {
-        "id": o.id, "name": o.name, "label": o.label,
-        "description": o.description, "endpoint_name": o.endpoint_name,
-        "method": o.method, "path": o.path,
-        "default_params": o.default_params or {},
-        "tags": o.tags or [], "is_active": o.is_active,
-        "created_at": o.created_at,
-    }
 
 
 # ── Endpoints (API connections) ───────────────────────────────────────────────

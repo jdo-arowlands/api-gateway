@@ -16,7 +16,7 @@ import httpx
 from datetime import datetime
 from typing import Any
 from sqlalchemy.orm import Session
-from database import APIEndpoint, APICallLog, APIOperation
+from database import APIEndpoint, APICallLog
 from token_manager import TokenManager
 
 logger = logging.getLogger("api_caller")
@@ -28,45 +28,6 @@ class APICaller:
         self.token_mgr = TokenManager(db)
 
     # ── Public ────────────────────────────────────────────────────────────────
-
-    async def call_operation(
-        self,
-        operation_name: str,
-        *,
-        params: dict | None = None,
-        body: Any = None,
-        extra_headers: dict | None = None,
-        triggered_by: str = "system",
-    ) -> dict:
-        """
-        Execute a named API operation configured in the portal.
-
-        Looks up the APIOperation row by name, merges default_params with any
-        runtime params (runtime wins), then dispatches via call(). Keeps paths
-        and default params in the portal DB instead of hardcoded in Python.
-        """
-        op = self.db.query(APIOperation).filter(
-            APIOperation.name == operation_name,
-            APIOperation.is_active == True,
-        ).first()
-
-        if not op:
-            return self._err(
-                f"Operation '{operation_name}' not found or inactive", None, 0, ""
-            )
-
-        merged_params = {**(op.default_params or {}), **(params or {})}
-        merged_body = body if body is not None else (op.default_body or None)
-
-        return await self.call(
-            op.endpoint_name,
-            op.method,
-            op.path,
-            params=merged_params or None,
-            body=merged_body,
-            extra_headers=extra_headers,
-            triggered_by=triggered_by,
-        )
 
     async def call(
         self,
