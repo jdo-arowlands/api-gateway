@@ -31,7 +31,7 @@ _AUTH_ENABLED = bool(_DASH_PASS)
 
 # Paths that never require a login: the login flow itself, health check,
 # and inbound webhooks (called by Retell / forms with their own secrets).
-_PUBLIC_PREFIXES = ("/login", "/logout", "/health", "/webhooks", "/static")
+_PUBLIC_PREFIXES = ("/login", "/logout", "/health", "/webhooks", "/static", "/proxy")
 
 def _is_public(path: str) -> bool:
     return any(path == p or path.startswith(p + "/") for p in _PUBLIC_PREFIXES)
@@ -120,6 +120,15 @@ app.add_middleware(
 
 
 app.include_router(webhook_router)
+
+# Denticon proxy router (ins-verify and portal data routes under /proxy/denticon).
+# Registered after app init. Its routes do their own internal verification, so
+# they're exempt from the session-login gate (see _PUBLIC_PREFIXES).
+try:
+    from denticon_proxy import router as denticon_proxy_router
+    app.include_router(denticon_proxy_router)
+except Exception as _e:
+    logging.getLogger("main").warning(f"denticon_proxy router not loaded: {_e}")
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
