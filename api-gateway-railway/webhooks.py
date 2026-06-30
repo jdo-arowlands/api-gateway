@@ -19,6 +19,7 @@ import hashlib
 import hmac
 import json
 import logging
+import os
 from datetime import datetime
 from fastapi import APIRouter, Request, HTTPException, Header
 from sqlalchemy import Column, Integer, String, Text, Boolean, DateTime, JSON
@@ -28,6 +29,11 @@ from database import Base, SessionLocal, engine
 logger = logging.getLogger("webhooks")
 
 router = APIRouter(prefix="/webhooks", tags=["Webhooks"])
+
+# Retell webhook signing secret — set via RETELL_WEBHOOK_SECRET env var.
+# When configured, all Retell inbound requests must carry a valid
+# X-Retell-Signature header or they are rejected with 401.
+_RETELL_WEBHOOK_SECRET = os.getenv("RETELL_WEBHOOK_SECRET", "")
 
 
 # ── Inbound event log ─────────────────────────────────────────────────────────
@@ -90,6 +96,11 @@ async def retell_webhook(
     Configure this URL in your Retell dashboard under Webhooks.
     """
     body = await request.body()
+
+    # Verify HMAC signature when a webhook secret is configured
+    if not _verify_hmac(_RETELL_WEBHOOK_SECRET, body, x_retell_signature):
+        raise HTTPException(401, "Invalid signature")
+
     db = SessionLocal()
     try:
         try:
@@ -108,7 +119,7 @@ async def retell_webhook(
             "agent_id": payload.get("agent_id") or payload.get("call", {}).get("agent_id"),
             "from_number": payload.get("call", {}).get("from_number"),
             "to_number": payload.get("call", {}).get("to_number"),
-            "duration_seconds": payload.get("call", {}).get("end_timestamp", 0) - 
+            "duration_seconds": payload.get("call", {}).get("end_timestamp", 0) -
                                  payload.get("call", {}).get("start_timestamp", 0)
                                  if payload.get("call", {}).get("end_timestamp") else None,
             "transcript": payload.get("call", {}).get("transcript"),
@@ -167,6 +178,11 @@ async def retell_function(
     within Retell's ~seconds-long timeout.
     """
     body = await request.body()
+
+    # Verify HMAC signature when a webhook secret is configured
+    if not _verify_hmac(_RETELL_WEBHOOK_SECRET, body, x_retell_signature):
+        raise HTTPException(401, "Invalid signature")
+
     db = SessionLocal()
     try:
         try:
