@@ -16,12 +16,14 @@ jobs:
         with:
           creds: ${{ secrets.AZURE_CREDENTIALS }}
 
+      - name: Zip application
+        run: |
+          cd api-gateway-railway
+          zip -r ../app.zip .
+
       - name: Deploy to staging slot
-        uses: azure/webapps-deploy@v3
-        with:
-          app-name: jdo-api-gateway
-          slot-name: staging
-          package: api-gateway-railway
+        run: |
+          az webapp deploy --name jdo-api-gateway --resource-group rg-jdo-api-gateway --slot staging --src-path app.zip --type zip
 
   swap-to-production:
     runs-on: ubuntu-latest
