@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
 
 jobs:
-  deploy-staging:
+  deploy-production:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -21,24 +21,6 @@ jobs:
           cd api-gateway-railway
           zip -r ../app.zip .
 
-      - name: Deploy to staging slot
+      - name: Deploy to production
         run: |
-          az webapp deploy --name jdo-api-gateway --resource-group rg-jdo-api-gateway --slot staging --src-path app.zip --type zip
-
-  swap-to-production:
-    runs-on: ubuntu-latest
-    needs: deploy-staging
-    environment: production
-    steps:
-      - name: Azure Login
-        uses: azure/login@v2
-        with:
-          creds: ${{ secrets.AZURE_CREDENTIALS }}
-
-      - name: Swap staging to production
-        run: |
-          az webapp deployment slot swap \
-            --name jdo-api-gateway \
-            --resource-group rg-jdo-api-gateway \
-            --slot staging \
-            --target-slot production
+          az webapp deploy --name jdo-api-gateway --resource-group rg-jdo-api-gateway --src-path app.zip --type zip
