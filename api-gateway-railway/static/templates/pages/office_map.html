@@ -1,0 +1,45 @@
+<div id="page-office-map" class="page" style="display:none">
+  <div class="topbar">
+    <h2>Office Phone Map</h2>
+    <div class="topbar-actions">
+      <button class="btn btn-primary" onclick="openOfficeModal()">+ Add Mapping</button>
+    </div>
+  </div>
+  <div class="content">
+    <div class="table-wrap">
+      <div class="table-header">
+        <h3>Dialed Number → Denticon Office</h3>
+        <div class="filter-bar">
+          <div class="search-wrap">
+            <span class="icon">🔍</span>
+            <input type="text" placeholder="Search..."
+              oninput="filterTable('office-map-body', this.value, [0,1,2])">
+          </div>
+        </div>
+      </div>
+      <table>
+        <thead>
+          <tr>
+            <th>Phone Number</th>
+            <th>Office Name</th>
+            <th>Office ID</th>
+            <th>Project</th>
+            <th>Status</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody id="office-map-body">
+          <tr>
+            <td colspan="6" class="muted" style="text-align:center;padding:40px">Loading...</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+    <p style="font-size:12px;color:var(--muted);margin-top:12px">
+      When a patient dials one of these numbers, the Retell agent resolves the office automatically —
+      no need to ask which location. The number Retell reports as
+      <code style="font-family:var(--mono);font-size:11px;background:var(--surface2);padding:1px 5px;border-radius:3px">to_number</code>
+      is matched here.
+    </p>
+  </div>
+</div>

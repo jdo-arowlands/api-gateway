@@ -1,0 +1,65 @@
+<div id="page-dashboard" class="page">
+  <div class="topbar">
+    <h2>Dashboard</h2>
+    <div class="topbar-actions">
+      <button class="btn btn-ghost btn-sm" onclick="loadDashboard()">↺ Refresh</button>
+    </div>
+  </div>
+  <div class="content">
+
+    <!-- Stat Cards -->
+    <div class="stat-grid" id="stat-grid">
+      <div class="stat-card blue">
+        <div class="label">Total Calls</div>
+        <div class="value" id="stat-total">—</div>
+        <div class="sub">All time</div>
+      </div>
+      <div class="stat-card green">
+        <div class="label">Success</div>
+        <div class="value" id="stat-success">—</div>
+        <div class="sub" id="stat-success-pct">—</div>
+      </div>
+      <div class="stat-card red">
+        <div class="label">Failed</div>
+        <div class="value" id="stat-failed">—</div>
+      </div>
+      <div class="stat-card">
+        <div class="label">Avg Response</div>
+        <div class="value" id="stat-avg-rt">—</div>
+        <div class="sub">ms</div>
+      </div>
+      <div class="stat-card purple">
+        <div class="label">Active Jobs</div>
+        <div class="value" id="stat-jobs">—</div>
+      </div>
+      <div class="stat-card">
+        <div class="label">Webhooks</div>
+        <div class="value" id="stat-webhooks">—</div>
+        <div class="sub">Received</div>
+      </div>
+    </div>
+
+    <!-- Recent Job Runs -->
+    <div class="table-wrap">
+      <div class="table-header">
+        <h3>Recent Job Runs</h3>
+      </div>
+      <table>
+        <thead>
+          <tr>
+            <th>Job</th>
+            <th>Triggered By</th>
+            <th>Status</th>
+            <th>Time</th>
+          </tr>
+        </thead>
+        <tbody id="recent-runs-body">
+          <tr>
+            <td colspan="4" class="muted" style="text-align:center;padding:24px">Loading...</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+  </div>
+</div>

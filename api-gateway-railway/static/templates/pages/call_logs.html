@@ -1,0 +1,44 @@
+<div id="page-call-logs" class="page" style="display:none">
+  <div class="topbar">
+    <h2>Call Logs</h2>
+  </div>
+  <div class="content">
+    <div class="table-wrap">
+      <div class="table-header">
+        <h3>API Call History</h3>
+        <div class="filter-bar">
+          <div class="search-wrap" style="min-width:160px">
+            <span class="icon">🔍</span>
+            <input type="text" placeholder="Search..." id="log-search" oninput="loadLogs(0)">
+          </div>
+          <select id="log-status-filter" onchange="loadLogs(0)" style="width:120px">
+            <option value="">All status</option>
+            <option value="true">Success</option>
+            <option value="false">Failed</option>
+          </select>
+          <button class="btn btn-ghost btn-sm" onclick="loadLogs(0)">↺</button>
+        </div>
+      </div>
+      <table>
+        <thead>
+          <tr>
+            <th>Time</th>
+            <th>Endpoint</th>
+            <th>Method</th>
+            <th>Path</th>
+            <th>Status</th>
+            <th>RT (ms)</th>
+            <th>Triggered By</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody id="call-logs-body">
+          <tr>
+            <td colspan="8" class="muted" style="text-align:center;padding:40px">Loading...</td>
+          </tr>
+        </tbody>
+      </table>
+      <div class="pagination" id="logs-pagination"></div>
+    </div>
+  </div>
+</div>

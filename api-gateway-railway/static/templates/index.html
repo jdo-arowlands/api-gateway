@@ -1,0 +1,60 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>API Gateway</title>
+  <!-- <link rel="stylesheet" href="/static/styles.css" /> -->
+  <link rel="stylesheet" href="/static/css/styles.css" />
+</head>
+
+<body>
+
+  <!-- ── Sidebar ── -->
+  {% include "partials/sidebar.html" %}
+
+  <!-- ── Main Content ── -->
+  <div class="main">
+    {% include "pages/dashboard.html" %}
+    {% include "pages/projects.html" %}
+    {% include "pages/endpoints.html" %}
+    {% include "pages/office_map.html" %}
+    {% include "pages/operations.html" %}
+    {% include "pages/jobs.html" %}
+    {% include "pages/webhooks.html" %}
+    {% include "pages/call_logs.html" %}
+    {% include "pages/job_runs.html" %}
+    {% include "pages/admin_tools.html" %}
+    {% include "pages/settings.html" %}
+  </div>
+
+  <!-- ── Modals ── -->
+  {% include "modals/endpoint_modal.html" %}
+  {% include "modals/project_modal.html" %}
+  {% include "modals/office_modal.html" %}
+  {% include "modals/job_modal.html" %}
+  {% include "modals/operation_modal.html" %}
+
+  <!-- ── Log Detail Drawer ── -->
+  <div class="drawer-overlay" id="drawer-overlay" onclick="closeDrawer()"></div>
+  <div class="drawer" id="detail-drawer">
+    <div class="drawer-head">
+      <h3 id="drawer-title">Call Detail</h3>
+      <button class="modal-close" onclick="closeDrawer()">×</button>
+    </div>
+    <div class="drawer-body" id="drawer-body"></div>
+  </div>
+
+  <!-- ── Toast ── -->
+  <div id="toast"></div>
+
+  <script src="/static/js/api.js"></script>
+  <script src="/static/js/ui.js"></script>
+  <script src="/static/js/pages.js"></script>
+  <script src="/static/js/main.js"></script>
+  <!-- <script src="/static/main.js"></script> -->
+
+</body>
+
+</html>

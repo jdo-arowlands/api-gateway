@@ -1,0 +1,40 @@
+<div class="modal-overlay" id="office-modal">
+  <div class="modal" style="width:480px">
+    <div class="modal-head">
+      <h3 id="office-modal-title">Add Mapping</h3>
+      <button class="modal-close" onclick="closeModal('office-modal')">×</button>
+    </div>
+    <div class="modal-body">
+      <input type="hidden" id="office-id-field">
+      <div class="form-grid">
+
+        <div class="form-group full">
+          <label>Phone Number (the number patients dial)</label>
+          <input id="office-phone" placeholder="+18135550100">
+        </div>
+
+        <div class="form-group">
+          <label>Office Name</label>
+          <input id="office-name" placeholder="Jefferson 59">
+        </div>
+
+        <div class="form-group">
+          <label>Denticon Office ID</label>
+          <input id="office-denticon-id" placeholder="OFFICE_59">
+        </div>
+
+        <div class="form-group full">
+          <label>Project (optional)</label>
+          <select id="office-project">
+            <option value="">— No project —</option>
+          </select>
+        </div>
+
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-ghost" onclick="closeModal('office-modal')">Cancel</button>
+      <button class="btn btn-primary" onclick="saveOffice()">Save Mapping</button>
+    </div>
+  </div>
+</div>

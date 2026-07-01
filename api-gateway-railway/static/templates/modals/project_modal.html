@@ -1,0 +1,51 @@
+<div class="modal-overlay" id="project-modal">
+  <div class="modal" style="width:460px">
+    <div class="modal-head">
+      <h3 id="project-modal-title">New Project</h3>
+      <button class="modal-close" onclick="closeModal('project-modal')">×</button>
+    </div>
+    <div class="modal-body">
+      <input type="hidden" id="proj-id">
+      <div class="form-grid">
+
+        <div class="form-group full">
+          <label>Project Name</label>
+          <input id="proj-name" placeholder="e.g. Jefferson Dental">
+        </div>
+
+        <div class="form-group full">
+          <label>Description (optional)</label>
+          <input id="proj-desc" placeholder="What this group of endpoints is for">
+        </div>
+
+        <div class="form-group">
+          <label>Color</label>
+          <input id="proj-color" type="color" value="#2f81f7"
+                 style="height:38px;padding:3px;cursor:pointer">
+        </div>
+
+        <div class="form-group full"
+             style="border-top:1px solid var(--border);padding-top:14px;margin-top:4px">
+          <label>Shared Subscription Key Header (optional)</label>
+          <input id="proj-subkey-header" placeholder="e.g. PDDS-Subscription-Key">
+          <span style="font-size:11px;color:var(--muted)">
+            Sent on every endpoint in this project, alongside its own auth.
+          </span>
+        </div>
+
+        <div class="form-group full">
+          <label>Subscription Key Value</label>
+          <input id="proj-subkey-value" type="password" placeholder="••••••••">
+          <span id="proj-subkey-hint" style="font-size:11px;color:var(--muted);display:none">
+            A key is set. Leave blank to keep it; type to replace.
+          </span>
+        </div>
+
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-ghost" onclick="closeModal('project-modal')">Cancel</button>
+      <button class="btn btn-primary" onclick="saveProject()">Save Project</button>
+    </div>
+  </div>
+</div>

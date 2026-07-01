@@ -1,0 +1,39 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Sign in · API Gateway</title>
+
+    <link rel="stylesheet" href="/static/New/css/login.css" />
+
+</head>
+
+<body>
+    <form class="card" method="post" action="/login">
+        <div class="logo">
+            <div class="icon">⚡</div>
+            <div>
+                <h1>API Gateway</h1>
+                <span>Sign in to continue</span>
+            </div>
+        </div>
+
+        {% if error %}
+        <div class="err">
+            {{ error }}
+        </div>
+        {% endif %}
+
+        <label for="username">Username</label>
+        <input id="username" name="username" type="text" autocomplete="username" autofocus required>
+
+        <label for="password">Password</label>
+        <input id="password" name="password" type="password" autocomplete="current-password" required>
+
+        <button type="submit">Sign in</button>
+    </form>
+</body>
+
+</html>

@@ -1,0 +1,68 @@
+<aside class="sidebar">
+  <div class="sidebar-logo">
+    <div class="icon">⚡</div>
+    <div>
+      <h1>API Gateway</h1>
+      <span>v1.0</span>
+    </div>
+  </div>
+  <nav class="sidebar-nav">
+
+    <div class="nav-section">
+      <div class="nav-label">Overview</div>
+      <button class="nav-item active" onclick="showPage('dashboard')">
+        📊 Dashboard
+      </button>
+    </div>
+
+    <div class="nav-section">
+      <div class="nav-label">Connections</div>
+      <button class="nav-item" onclick="showPage('projects')">
+        📁 Projects <span class="badge" id="badge-projects">—</span>
+      </button>
+      <button class="nav-item" onclick="showPage('endpoints')">
+        🔌 Endpoints <span class="badge" id="badge-endpoints">—</span>
+      </button>
+      <button class="nav-item" onclick="showPage('office-map')">
+        ☎️ Office Map <span class="badge" id="badge-officemap">—</span>
+      </button>
+      <button class="nav-item" onclick="showPage('operations')">
+        ⚙️ Operations <span class="badge" id="badge-operations">—</span>
+      </button>
+    </div>
+
+    <div class="nav-section">
+      <div class="nav-label">Automation</div>
+      <button class="nav-item" onclick="showPage('jobs')">
+        ⏱ Scheduled Jobs <span class="badge" id="badge-jobs">—</span>
+      </button>
+      <button class="nav-item" onclick="showPage('webhooks-page')">
+        🪝 Webhooks <span class="badge" id="badge-webhooks">—</span>
+      </button>
+    </div>
+
+    <div class="nav-section">
+      <div class="nav-label">Logs</div>
+      <button class="nav-item" onclick="showPage('call-logs')">
+        📋 Call Logs
+      </button>
+      <button class="nav-item" onclick="showPage('job-runs')">
+        🏃 Job Runs
+      </button>
+    </div>
+
+    <div class="nav-section">
+      <div class="nav-label">Config</div>
+      <button class="nav-item" onclick="showPage('tools')">
+        🛠 Admin Tools
+      </button>
+      <button class="nav-item" onclick="showPage('settings')">
+        ⚙️ Settings
+      </button>
+      <button class="nav-item" onclick="window.location.href='/logout'">
+        ⏻ Sign out
+      </button>
+    </div>
+
+  </nav>
+</aside>

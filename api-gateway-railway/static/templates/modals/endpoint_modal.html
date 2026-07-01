@@ -1,0 +1,95 @@
+<div class="modal-overlay" id="endpoint-modal">
+  <div class="modal">
+    <div class="modal-head">
+      <h3 id="endpoint-modal-title">New Endpoint</h3>
+      <button class="modal-close" onclick="closeModal('endpoint-modal')">×</button>
+    </div>
+    <div class="modal-body">
+      <input type="hidden" id="ep-id">
+      <div class="form-grid">
+
+        <div class="form-group">
+          <label>Name (unique identifier)</label>
+          <input id="ep-name" placeholder="e.g. salesforce_prod">
+        </div>
+
+        <div class="form-group">
+          <label>Project</label>
+          <select id="ep-project">
+            <option value="">— No project —</option>
+          </select>
+        </div>
+
+        <div class="form-group">
+          <label>Auth Type</label>
+          <select id="ep-auth" onchange="toggleAuthFields()">
+            <option value="bearer">OAuth2 / Bearer Token</option>
+            <option value="api_key">API Key</option>
+            <option value="basic">Basic Auth</option>
+          </select>
+        </div>
+
+        <div class="form-group full">
+          <label>Base URL</label>
+          <input id="ep-url" placeholder="https://api.example.com/v1">
+        </div>
+
+        <!-- Bearer / OAuth2 fields -->
+        <div id="oauth-fields" class="form-group full"
+             style="display:grid;grid-template-columns:1fr 1fr;gap:16px">
+          <div class="form-group">
+            <label>Token URL</label>
+            <input id="ep-token-url" placeholder="https://api.example.com/oauth/token">
+          </div>
+          <div class="form-group">
+            <label>Scope (optional)</label>
+            <input id="ep-scope" placeholder="read write">
+          </div>
+          <div class="form-group">
+            <label>Client ID</label>
+            <input id="ep-client-id">
+          </div>
+          <div class="form-group">
+            <label>Client Secret</label>
+            <input id="ep-client-secret" type="password" placeholder="••••••••">
+            <span id="ep-secret-hint" style="font-size:11px;color:var(--muted);display:none">
+              Leave blank to keep the existing secret.
+            </span>
+          </div>
+        </div>
+
+        <!-- API Key fields -->
+        <div id="apikey-fields" class="form-group full"
+             style="display:none;grid-template-columns:1fr 1fr;gap:16px">
+          <div class="form-group">
+            <label>API Key</label>
+            <input id="ep-api-key" type="password">
+            <span id="ep-apikey-hint" style="font-size:11px;color:var(--muted);display:none">
+              Leave blank to keep the existing key.
+            </span>
+          </div>
+          <div class="form-group">
+            <label>Header Name</label>
+            <input id="ep-api-key-header" value="X-API-Key">
+          </div>
+        </div>
+
+        <!-- Basic Auth uses client_id/client_secret as username/password -->
+        <div class="form-group">
+          <label>Timeout (seconds)</label>
+          <input id="ep-timeout" type="number" value="30" min="1" max="120">
+        </div>
+
+        <div class="form-group full">
+          <label>Extra Headers (JSON)</label>
+          <textarea id="ep-headers" rows="3" placeholder='{"X-Custom": "value"}'>{}</textarea>
+        </div>
+
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-ghost" onclick="closeModal('endpoint-modal')">Cancel</button>
+      <button class="btn btn-primary" onclick="saveEndpoint()">Save Endpoint</button>
+    </div>
+  </div>
+</div>

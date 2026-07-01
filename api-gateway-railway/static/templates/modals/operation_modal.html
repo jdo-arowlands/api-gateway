@@ -1,0 +1,72 @@
+<div class="modal-overlay" id="operation-modal">
+  <div class="modal" style="width:560px">
+    <div class="modal-head">
+      <h3 id="operation-modal-title">Add Operation</h3>
+      <button class="modal-close" onclick="closeModal('operation-modal')">&times;</button>
+    </div>
+    <div class="modal-body">
+      <input type="hidden" id="op-id">
+      <div class="form-grid">
+
+        <div class="form-group full">
+          <label>Name (slug — unique id used in code)</label>
+          <input id="op-name" placeholder="denticon-appointments">
+        </div>
+
+        <div class="form-group full">
+          <label>Label</label>
+          <input id="op-label" placeholder="Fetch Appointments">
+        </div>
+
+        <div class="form-group">
+          <label>Endpoint</label>
+          <select id="op-endpoint"></select>
+        </div>
+
+        <div class="form-group">
+          <label>Method</label>
+          <select id="op-method">
+            <option>GET</option>
+            <option>POST</option>
+            <option>PUT</option>
+            <option>PATCH</option>
+            <option>DELETE</option>
+          </select>
+        </div>
+
+        <div class="form-group full">
+          <label>Path (use {patient_id} or {id} for path params)</label>
+          <input id="op-path" placeholder="/denticon/appointments/v0/">
+        </div>
+
+        <div class="form-group full">
+          <label>Default Params (JSON)</label>
+          <textarea id="op-params" rows="3" placeholder='{"PageSize": 500}'>{}</textarea>
+        </div>
+
+        <div class="form-group full">
+          <label>Description (optional)</label>
+          <input id="op-desc" placeholder="What this operation does">
+        </div>
+
+        <div class="form-group">
+          <label>Tags (comma-separated)</label>
+          <input id="op-tags" placeholder="denticon, appointments">
+        </div>
+
+        <div class="form-group">
+          <label>Status</label>
+          <select id="op-active">
+            <option value="true">Active</option>
+            <option value="false">Inactive</option>
+          </select>
+        </div>
+
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-ghost" onclick="closeModal('operation-modal')">Cancel</button>
+      <button class="btn btn-primary" onclick="saveOperation()">Save Operation</button>
+    </div>
+  </div>
+</div>

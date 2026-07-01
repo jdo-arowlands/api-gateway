@@ -1,0 +1,70 @@
+<div class="modal-overlay" id="job-modal">
+  <div class="modal">
+    <div class="modal-head">
+      <h3>New Job</h3>
+      <button class="modal-close" onclick="closeModal('job-modal')">×</button>
+    </div>
+    <div class="modal-body">
+      <div class="form-grid">
+
+        <div class="form-group">
+          <label>Job Name (unique)</label>
+          <input id="job-name" placeholder="e.g. retell_call_ended">
+        </div>
+
+        <div class="form-group">
+          <label>Type</label>
+          <select id="job-type" onchange="toggleJobFields()">
+            <option value="webhook">Webhook (event-triggered)</option>
+            <option value="cron">Cron (scheduled)</option>
+            <option value="interval">Interval (every N)</option>
+            <option value="onetime">One-time</option>
+          </select>
+        </div>
+
+        <div id="job-schedule-wrap" class="form-group" style="display:none">
+          <label>Cron Expression</label>
+          <input id="job-schedule" placeholder="0 9 * * 1-5  (weekdays 9am)">
+        </div>
+
+        <div id="job-interval-wrap" class="form-group" style="display:none">
+          <label>Interval</label>
+          <input id="job-interval" placeholder="30s / 5m / 2h / 1d">
+        </div>
+
+        <div id="job-runat-wrap" class="form-group" style="display:none">
+          <label>Run At (UTC)</label>
+          <input id="job-run-at" type="datetime-local">
+        </div>
+
+        <div class="form-group">
+          <label>Action</label>
+          <select id="job-action"></select>
+        </div>
+
+        <div class="form-group full">
+          <label>Description</label>
+          <input id="job-desc" placeholder="What does this job do?">
+        </div>
+
+        <div class="form-group full">
+          <label>Action Params (JSON)</label>
+          <textarea id="job-params" rows="4"
+            placeholder='{"endpoint_name": "my_api", "method": "GET", "path": "/data"}'>{}</textarea>
+        </div>
+
+        <div id="job-webhook-hint" class="form-group full">
+          <label style="color:var(--muted)">Webhook trigger URL (copy after saving)</label>
+          <p style="font-size:12px;color:var(--muted)">
+            POST to: <code style="font-family:var(--mono)">/webhooks/trigger/{job-name}</code>
+          </p>
+        </div>
+
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-ghost" onclick="closeModal('job-modal')">Cancel</button>
+      <button class="btn btn-primary" onclick="saveJob()">Create Job</button>
+    </div>
+  </div>
+</div>

@@ -1,0 +1,76 @@
+<div id="page-webhooks-page" class="page" style="display:none">
+  <div class="topbar">
+    <h2>Webhooks</h2>
+  </div>
+  <div class="content">
+
+    <!-- Inbound Webhook URLs -->
+    <div class="table-wrap" style="margin-bottom:20px">
+      <div class="table-header">
+        <h3>Inbound Webhook URLs</h3>
+      </div>
+      <div style="padding:20px;display:flex;flex-direction:column;gap:16px">
+        <div>
+          <label style="display:block;margin-bottom:8px;font-size:12px;color:var(--muted)">
+            RETELL AI — Post this in your Retell dashboard under Webhooks
+          </label>
+          <div class="webhook-url">
+            <span id="retell-url"></span>
+            <button class="btn btn-ghost btn-sm" onclick="copyText('retell-url')">Copy</button>
+          </div>
+        </div>
+        <div>
+          <label style="display:block;margin-bottom:8px;font-size:12px;color:var(--muted)">
+            WEB FORM — Replace {form_id} with your form identifier
+          </label>
+          <div class="webhook-url">
+            <span id="form-url"></span>
+            <button class="btn btn-ghost btn-sm" onclick="copyText('form-url')">Copy</button>
+          </div>
+        </div>
+        <div>
+          <label style="display:block;margin-bottom:8px;font-size:12px;color:var(--muted)">
+            GENERIC TRIGGER — Fire any job by name
+          </label>
+          <div class="webhook-url">
+            <span id="generic-url"></span>
+            <button class="btn btn-ghost btn-sm" onclick="copyText('generic-url')">Copy</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Inbound Event Log -->
+    <div class="table-wrap">
+      <div class="table-header">
+        <h3>Inbound Events</h3>
+        <div class="filter-bar">
+          <select onchange="loadWebhookEvents(this.value)" style="width:140px">
+            <option value="">All sources</option>
+            <option value="retell">Retell AI</option>
+            <option value="form">Web Form</option>
+            <option value="generic">Generic</option>
+            <option value="custom">Custom</option>
+          </select>
+        </div>
+      </div>
+      <table>
+        <thead>
+          <tr>
+            <th>Time</th>
+            <th>Source</th>
+            <th>ID / Event</th>
+            <th>Job Triggered</th>
+            <th>Result</th>
+          </tr>
+        </thead>
+        <tbody id="webhook-events-body">
+          <tr>
+            <td colspan="5" class="muted" style="text-align:center;padding:40px">Loading...</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+  </div>
+</div>
