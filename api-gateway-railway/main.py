@@ -938,56 +938,33 @@ def health():
     return {"status": "ok"}
 
 
-# ── Login / Logout ────────────────────────────────────────────────────────────
+# ── Serve dashboard ───────────────────────────────────────────────────────────
+# The auth_gate middleware already protects this route.
 
-_LOGIN_PAGE = """<!DOCTYPE html>
-<html lang="en"><head>
-<meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Sign in · API Gateway</title>
-<style>
-  :root {{ --bg:#0d1117; --surface:#161b22; --border:#30363d; --text:#e6edf3;
-           --muted:#7d8590; --accent:#2f81f7; --red:#f85149; }}
-  * {{ box-sizing:border-box; margin:0; padding:0; }}
-  body {{ background:var(--bg); color:var(--text); min-height:100vh;
-          display:flex; align-items:center; justify-content:center;
-          font-family:'Inter',system-ui,sans-serif; }}
-  .card {{ background:var(--surface); border:1px solid var(--border);
-           border-radius:12px; padding:36px 32px; width:340px; }}
-  .logo {{ display:flex; align-items:center; gap:10px; margin-bottom:24px; }}
-  .logo .icon {{ width:36px; height:36px; background:var(--accent); border-radius:9px;
-                 display:flex; align-items:center; justify-content:center; font-size:18px; }}
-  .logo h1 {{ font-size:16px; font-weight:600; }}
-  .logo span {{ font-size:12px; color:var(--muted); display:block; }}
-  label {{ font-size:12px; color:var(--muted); display:block; margin-bottom:6px; }}
-  input {{ width:100%; background:#1c2128; border:1px solid var(--border); border-radius:7px;
-           color:var(--text); padding:10px 12px; font-size:14px; outline:none; margin-bottom:16px; }}
-  input:focus {{ border-color:var(--accent); }}
-  button {{ width:100%; background:var(--accent); color:#fff; border:none; border-radius:7px;
-            padding:11px; font-size:14px; font-weight:500; cursor:pointer; }}
-  button:hover {{ background:#1f6feb; }}
-  .err {{ background:rgba(248,81,73,0.1); border:1px solid rgba(248,81,73,0.3);
-          color:var(--red); font-size:13px; padding:9px 12px; border-radius:7px; margin-bottom:16px; }}
-</style></head><body>
-  <form class="card" method="post" action="/login">
-    <div class="logo">
-      <div class="icon">⚡</div>
-      <div><h1>API Gateway</h1><span>Sign in to continue</span></div>
-    </div>
-    {error}
-    <label>Username</label>
-    <input name="username" autocomplete="username" autofocus required>
-    <label>Password</label>
-    <input name="password" type="password" autocomplete="current-password" required>
-    <button type="submit">Sign in</button>
-  </form>
-</body></html>"""
+_STATIC_DIR = os.path.join(os.path.dirname(__file__), "static")
+app.mount("/static", StaticFiles(directory=_STATIC_DIR), name="static")
+templates = Jinja2Templates(directory=os.path.join(_STATIC_DIR, "templates"))
+
+
+@app.get("/")
+def serve_dashboard(request: Request):
+    index = os.path.join(_STATIC_DIR, "templates", "index.html")
+    if os.path.exists(index):
+        return templates.TemplateResponse("index.html", {"request": request})
+    return JSONResponse({"message": "API Gateway running — no frontend found"})
+
+
+if os.path.exists(_STATIC_DIR):
+    app.mount("/static", StaticFiles(directory=_STATIC_DIR), name="static")
+
+# ── Login / Logout ────────────────────────────────────────────────────────────
 
 
 @app.get("/login", response_class=HTMLResponse)
 def login_page(request: Request):
     if not _AUTH_ENABLED or request.session.get("authed"):
         return RedirectResponse(url="/", status_code=302)
-    return HTMLResponse(_LOGIN_PAGE.format(error=""))
+    return templates.TemplateResponse("login.html", {"request": request, "error": ""})
 
 
 @app.post("/login", response_class=HTMLResponse)
@@ -1002,7 +979,12 @@ def login_submit(
         request.session["user"] = username
         return RedirectResponse(url="/", status_code=302)
     err = '<div class="err">Incorrect username or password.</div>'
-    return HTMLResponse(_LOGIN_PAGE.format(error=err), status_code=401)
+    # return HTMLResponse(_LOGIN_PAGE.format(error=err), status_code=401)
+    return templates.TemplateResponse(
+        "login.html",
+        {"request": request, "error": "Incorrect username or password."},
+        status_code=401,
+    )
 
 
 @app.get("/logout")
@@ -1017,24 +999,3 @@ def whoami(request: Request):
         "user": request.session.get("user", _DASH_USER),
         "auth_enabled": _AUTH_ENABLED,
     }
-
-
-# ── Serve dashboard ───────────────────────────────────────────────────────────
-# The auth_gate middleware already protects this route.
-
-_STATIC_DIR = os.path.join(os.path.dirname(__file__), "static")
-app.mount("/static", StaticFiles(directory="static"), name="static")
-templates = Jinja2Templates(directory=os.path.join(_STATIC_DIR, "templates"))
-
-
-@app.get("/")
-def serve_dashboard(request: Request):
-    index = os.path.join(_STATIC_DIR, "templates", "index.html")
-    if os.path.exists(index):
-        return templates.TemplateResponse("index.html", {"request": request})
-        # return FileResponse(index)
-    return JSONResponse({"message": "API Gateway running — no frontend found"})
-
-
-if os.path.exists(_STATIC_DIR):
-    app.mount("/static", StaticFiles(directory=_STATIC_DIR), name="static")
